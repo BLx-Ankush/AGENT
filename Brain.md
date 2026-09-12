@@ -49,6 +49,7 @@
 | 39 | 2026-09-12 13:14 | Phase 8 | Popup evidence panel: 7-step demo overlay (perception, redaction scheme, planner proposal, redemption, attack defense, metrics grid), planner config (deterministic/server) |
 | 40 | 2026-09-12 13:16 | Phase 8 | Attack test suite: 16 tests — stale plan, replay, wrong-target/origin/session/nonce, prompt injection, forbidden actions (eval/navigate/script), raw value egress, doc gen mismatch |
 | 41 | 2026-09-12 13:20 | Phase 8 | ✅ 42/42 total tests pass (26 security + 16 attack). Chrome 168ms, Firefox 145ms. Planner server ready. |
+| 42 | 2026-09-12 13:33 | Repository | ✅ Pushed full codebase to GitHub (`https://github.com/BLx-Ankush/AGENT.git`) on `main` branch with clean `.gitignore` (all 42 tests passing, extensions built). |
 
 ---
 
