@@ -1,0 +1,431 @@
+# Research.md: independent SIH 2026 evaluation
+
+**Reviewed:** 6 September 2026  
+**Target:** SIH26171, On-device Visual Perception for Light-weight Browser Agents  
+**Input:** Research.md, 1,572 lines, including its final amendments and novelty analysis  
+**Decision:** Continue with the project, but correct the research before using it as an authoritative architecture specification.
+
+## 1. Executive verdict
+
+**Strong research foundation, not yet superior or build-ready research.** The document is unusually attentive to rubric alignment, browser constraints, privacy-utility trade-offs, and prior mistakes. However, serious security errors remain in its final amendments, the prior-art survey misses relevant browser-resident implementations, and several guarantees are presented without executable evidence.
+
+The core idea is worth building: local visual perception, privacy filtering before remote planning, and locally controlled execution. What is not established is that the design is secure as specified, outperforms alternatives, or fits the proposed resource envelope.
+
+**Your architecture-generation condition is not met as written.** I have therefore not created `architecture.md` by carrying this design forward unchanged. This review identifies the corrections needed and the narrower contribution worth implementing. A corrected architecture can follow once you approve using these findings instead of the dossier's current guarantees.
+
+This is a recommendation to improve the specification, not abandon the problem statement.
+
+| Dimension | Assessment | Explanation |
+|---|---|---|
+| Problem-statement fit | Strong, with source caveat | The detailed community mirror corroborates browser-local vision, privacy filtering, remote planning, and execution. |
+| Literature coverage | Substantial but incomplete | Relevant browser redactors, local agents, and adversarial screenshot evaluation were omitted. |
+| Novelty | Needs narrowing | Several proposed differentiators already exist separately; the exact combination remains an engineering hypothesis. |
+| Security reasoning | Not ready | CORS, type safety, egress mediation, replay, and destination disclosure require correction. |
+| Browser feasibility | Plausible, unmeasured | APIs and runtimes exist; the particular extension/model combination has not been demonstrated. |
+| Evaluation plan | Good direction, incomplete protocol | Privacy-utility pairing is right; definitions, matched baselines, and failure accounting need work. |
+| Delivery scope | Too broad for a first release | Two engines, two backends, multiple models, dual-channel verification, and arbitrary-site execution are a large commitment. |
+| Evidence of superiority | Not established | No matched experiments or prototype results are supplied. |
+
+These are editorial assessments, not official SIH scores or predictions of selection.
+
+## 2. Scope and evidence limits
+
+I read the complete attachment, including sections 18 through 21. This review does not merely attack the explicitly superseded v1 design. I opened primary papers, model cards, browser documentation, and selected repository source files, and searched for omitted competing implementations.
+
+I did not execute the proposed extension, reproduce model benchmarks, run third-party repositories, audit every dependency, or independently revalidate every citation in the 139 KB dossier. Source-code inspection establishes visible behavior, not successful execution or a full security audit.
+
+The official SIH problem-statement page could not be retrieved during this review. The detailed community mirror was accessible. Requirements below are corroborated by that mirror, not newly authenticated against the official portal.
+
+## 3. SIH requirement validation
+
+The [detailed SIH26171 mirror][S1] matches the dossier on the central requirements:
+
+| Requirement | Finding |
+|---|---|
+| Local vision inside the browser | Explicitly requests a local ViT or equivalent computer-vision model. |
+| Chrome and Firefox | Both named in the expected client implementation. |
+| Sanitize before sending context | Explicit requirement. |
+| Central LLM/VLM interprets sanitized context | Explicit requirement. |
+| Client executes returned actions | Explicit requirement, with end-to-end assistance demonstrated. |
+| Offline-deployable server model | Open-source/open-weights models allowed; cloud-hosted instances may be used during SIH. |
+| Evaluation weights | 25% visual context, 20% PII detection, 20% redaction precision, 20% client resources, 15% end-to-end latency. |
+| Submission date | Mirror displays 30 September 2026; confirm through the official portal/coordinator. |
+
+The 16 September internal date comes from the supplied dossier, not independently verified institutional guidance. From 6 September, that leaves ten calendar days until the stated review date, with nine full intervening development dates, 7 through 15 September.
+
+Do not turn the weights into a predicted score without the organizers' normalization, test distribution, and scoring procedure. The theme/category and finale dataset note were not established by the retrieved detailed mirror and should not be described as newly verified here.
+
+**Alignment warning:** a DOM-only release does not satisfy the local-vision requirement. A giant local VLM is not mandatory either: a genuine local detector/OCR model may form part of the equivalent computer-vision implementation if it materially contributes to screen understanding.
+
+## 4. What checks out
+
+### 4.1 The central visual-privacy papers are real
+
+[WebPII][S2] describes 44,865 synthetic e-commerce UI images and reports WebRedact at 0.753 mAP@50 versus a 0.357 text-extraction baseline, with reported 20 ms CPU detector latency. Those core figures check out as author-reported results, not measurements reproduced here.
+
+[GUIGuard][S3] describes recognition, protection, and execution under protected observations. The retrieved current abstract and body state **241 trajectories and 4,080 screenshots**. This resolves the dossier's count discrepancy for the version retrieved in this review. Pin the version before quoting the count.
+
+GUIGuard explicitly describes its main protected-planning evaluation as an **offline planner-fidelity proxy**, not direct end-to-end task success. Its annotations are not exhaustive enough to treat every extra prediction as a false positive; the paper deliberately avoids ordinary precision in that setting.
+
+[CAPED][S4] supports task-aware pre-upload disclosure control, but the fuller results materially qualify the dossier's headline:
+
+| CAPED result | Correct interpretation |
+|---|---|
+| Weighted seeded leakage 0.766 to 0.268 | Success-conditioned result on a controlled 28-task seeded privacy evaluation. |
+| Seeded-task utility 0.929 | For that seeded evaluation, not all GUI tasks. |
+| AndroidWorld 77/116 baseline versus 64/116 with CAPED | 66.4% versus 55.2% task success, an 11.2 percentage-point utility reduction. |
+| Phone-side protection | Intended placement; the prototype was evaluated inside an AndroidWorld host/server harness. |
+
+The repeated â€œhigh utilityâ€ wording omits an important cost. CAPED remains useful prior art, but its leakage score is not a matched baseline for a different web-screen metric.
+
+### 4.2 Available but Invisible is closer prior art than the dossier suggests
+
+[Available but Invisible][S5] covers user instructions, UI hierarchies, and screenshots together. It explicitly discusses temporal and cross-modality consistency, a session-scoped mapping, a secure interaction proxy, and a local privacy gatekeeper for limited computations.
+
+This supports the project shape but weakens claims that unified identity or instruction/screenshot synchronization are newly contributed here. Update M1/M2 comparisons accordingly.
+
+[CaMeL][S26] also demonstrates that capability enforcement is about actual control/data flows and permitted recipients, not simply naming a placeholder a capability. Its guarantees should not be transferred to this design just by citation.
+
+### 4.3 Browser inference and host adapters are plausible
+
+The [FastVLM ONNX model card][S6] contains the fp16 embedding / q4 vision encoder / q4 decoder recipe and a browser example. This is a feasibility precedent, not proof of this extension's memory or latency. The example demonstrates image-to-text generation, not reliable PII localization or calibrated GUI grounding.
+
+[Chrome tabs documentation][S7] confirms the 2/s capture constant. [Offscreen documentation][S8] confirms Chrome 109+ MV3 availability, no service-worker DOM access, and `runtime` as the only extension API available inside an offscreen document.
+
+[MDN background documentation][S9] confirms Chrome service-worker and Firefox event-page/background-script behavior. Separate host adapters are sensible. Reconstructing DOM/ARIA semantics rather than claiming access to a cross-browser accessibility-tree API is also the right correction.
+
+## 5. Missing prior art changes the pitch
+
+These findings were checked in opened READMEs or source files, not accepted from search snippets alone.
+
+| Work | Verified material | Effect on novelty | Limitation |
+|---|---|---|---|
+| [athal7/image-pii-redactor][S10] | In-browser Tesseract.js OCR, Transformers.js multilingual NER, regex, burned-in screenshot redaction, redacted transcript, and documented Chrome/Firefox WASM support. | Browser-local screenshot sanitization and image-plus-text outputs already exist. | No complete hybrid planner action loop or independent two-output verifier was established. |
+| [BlackBar][S11] | MV3 screenshot redaction, DOM region mapping, unreadable-region reporting, restrictive CSP, runtime network check, and shipped-code/manifest CI checks. | Browser-resident privacy controls and network regression tests are existing patterns. | No local vision model, Firefox implementation, or hybrid planner loop was established. |
+| [safeclipper][S13] | Local OCR/PII masking and a 210-screenshot, 2,717-question redacted-image QA evaluation with privacy and utility results. | Attacking sanitized screenshots and reporting a privacy-utility pair is not new. | Rust/macOS/CLI, not WebExtension; no standing dual-channel runtime interlock was established. |
+| [RunAnywhere on-device browser agent][S14] | Vendor-described Chrome extension with local WebLLM/WebGPU planner and navigator. | Local private browser agents are already a category. | The article does not establish screenshot PII redaction, Firefox support, or this hybrid boundary. |
+| [Safe-Screen][S15] | README and action-guard code confirm local substitution and a remote vision-redaction mode. | The dossier correctly concedes the browser-agent placeholder loop. | Browser-resident local vision is not established. |
+
+The SupaSeeka repository found during search points back to athal7. Do not count them as two independent inventions.
+
+### Source-code scrutiny matters for competitors too
+
+The [image-pii-redactor service worker][S16] claims a network firewall. The inspected implementation leaves same-origin non-model requests unintercepted, routes model-origin requests into a cache-first function, and calls `fetch(request)` on a cache miss without checking the firewall flag there. The flag is also initialized to false in worker memory.
+
+Therefore the README's broad compromised-dependency protection claim is not established by that implementation. This is a **source-level observation**, not a tested exploit.
+
+[BlackBar's no-network test][S12] really does inspect shipped code and its manifest. That establishes prior art for a useful regression control, not proof that every conceivable network channel is impossible.
+
+### Updated novelty verdict
+
+The defensible contribution is a **measured integration**: cross-engine browser-local visual privacy, constrained hybrid planning, destination-aware local execution, and final-output verification with reproducible privacy-utility evaluation.
+
+Do not claim invention of browser inference, redaction, placeholders, session mappings, CSP, egress checks in CI, or adversarial privacy evaluation. This review does not establish that the exact combination is a world first.
+
+## 6. Critical corrections in the final design
+
+### C1. CORS does not prevent sending a payload
+
+**Critical. Dossier section 19, A1.**
+
+The final amendment says the page-side module cannot deliver a payload because the server does not send permissive CORS headers. That is false.
+
+[MDN's CORS guide][S17] states that simple requests do not require server opt-in to be received. Server opt-in controls whether the requesting script can read the response. Preflighted requests behave differently, but â€œno CORS headerâ€ is not a general confidentiality boundary.
+
+Same-origin requests, simple cross-origin requests, request URLs, form submissions, and resource loads must be considered. A server rejecting a received body is not equivalent to that body never crossing the network.
+
+**Correction:** distinguish minimal privileges, endpoint authentication, destination restrictions, payload validation, and scoped network tests. Never present CORS alone as a transmission barrier.
+
+### C2. The proposed TypeScript union accepts secrets
+
+**Critical. A5.1.**
+
+The dossier's union accepts this value:
+
+```ts
+const rawProtectedValue = "a-private-value";
+const payloadValue: ServerVisibleValue = {
+  kind: "nonSensitive",
+  literal: rawProtectedValue
+};
+```
+
+There is no type-level distinction between safe and unsafe text. `semanticLabel: string` and `token: string` accept arbitrary strings too. TypeScript does not perform PII detection.
+
+**Correction:** use private constructors/opaque brands to reduce accidental misuse, runtime validation to reject arbitrary objects, and approval bound to exact serialized bytes. Describe these as engineering controls, not proof that raw PII is unrepresentable.
+
+### C3. A regex scan of network APIs is not complete mediation
+
+**Critical. A5.2 and section 21.**
+
+Searching for `fetch(` misses aliases, computed properties, resource URLs, form submission, navigation, dependency code, and other channels. `navigator.connection` describes network status; it is not itself an exfiltration primitive.
+
+A whitelisted planner origin can still receive raw data by mistake. Destination policy is not content policy.
+
+**Correction:** combine source and built-bundle checks, dependency review, runtime schemas, destination restrictions, and instrumented adversarial tests. Separate fixed model provisioning from user-content transport. Delete the claim that the build cannot produce any artifact capable of disclosure.
+
+### C4. â€œProtected values never leave the deviceâ€ contradicts form filling
+
+**Critical. A3 and executor claims.**
+
+Typing an email or password into an authorized website exposes it to that website, which may transmit it immediately. Waiting for submit confirmation does not undo disclosure at the typing step.
+
+**Correction:** distinguish the remote planner from the authorized task destination. A defensible goal is to withhold raw screenshots and policy-protected values from the planner, while permitting explicitly authorized disclosure of particular values to a task website. The extension does not secure a compromised website.
+
+### C5. Single-use, node-binding, and salt do not make an intercepted plan inert
+
+**High. M2 and section 20.**
+
+An unused token can be raced. Nodes can be replaced or reused after navigation. A session can receive duplicate responses. Session salt does not stop in-session replay. Restoring only into the original source node also blocks legitimate transfer into a different form.
+
+**Correction:** separate stable entity references from one-action grants. Bind grants to session, tab, frame, document generation, target origin, current target identity, permitted operation, expiry, and request/action nonce. Consume atomically. Reauthorize new destinations or document generations. Do not generalize specific replay controls into â€œa stolen plan is useless.â€
+
+### C6. DOM-explained does not mean safe
+
+**High. T1/T4 and M1.**
+
+Geometric overlap does not prove the DOM text equals painted text. Overlays, pseudo-elements, transformed children, canvas content, background images, and malicious ARIA labels can disagree.
+
+**Correction:** separate geometry coverage from content agreement. Visually inspect risk-bearing regions and reject contradictory evidence. â€œNot detectedâ€ is not â€œknown safe.â€ Do not assume 90%+ structural coverage without measurement.
+
+### C7. A second OCR/NER pass cannot verify all visual privacy
+
+**High. M3/M5.**
+
+Both passes can miss faces, signatures, QR payloads, identity-card photos, low-contrast text, or contextual disclosure. Separate code paths can share models, preprocessing, labels, and blind spots. Scanning only known-sensitive strings cannot find unknown sensitive content.
+
+**Correction:** define text and non-text coverage separately. Unsupported/ambiguous crops should be omitted, conservatively masked, or held for local review. Measure verifier escape rate and false blocks. A passing scan is not a zero-leak certificate.
+
+### C8. Tasks, metadata, and later turns are additional leak channels
+
+**High. Wire contract and server path.**
+
+The task can contain a name, diagnosis, account number, or address. Node labels, page titles, URL paths/query strings, errors, crop reasons, capability category names, and execution results can also disclose information.
+
+**Correction:** sanitize the full final envelope and every later turn, not just node values and attached images. Keep the original task local until sanitized. Keep detailed audit logs local and redacted by default.
+
+### C9. Ordinary WebExtensions do not provide universal trusted input
+
+**High. Execution feasibility.**
+
+[MDN][S18] confirms that `dispatchEvent()` produces untrusted events and `HTMLElement.click()` fires an untrusted click. Sites may reject synthetic interactions. Native dialogs, privileged browser pages, inaccessible frames, and some custom controls add limits.
+
+[Content-script documentation][S19] distinguishes DOM access from screenshot access and lists privileged pages and the PDF viewer among injection restrictions.
+
+**Correction:** publish separate perception and actuation support matrices, verify outcomes, and hand off unsupported actions. Do not quietly introduce CDP/native helpers/site hacks while claiming the same portable architecture.
+
+### C10. Freshness and caching need explicit safety rules
+
+**High. Capture, cache, graph, executor.**
+
+Screenshot capture and DOM harvest are not atomic. A modal can move, a frame can navigate, the active tab can switch, and a value can change after inspection. Approximate frame hashes or origin/path/bbox caches can miss new secrets.
+
+**Correction:** stamp observations with document/frame generation and viewport state; invalidate on relevant changes; revalidate targets before acting; abort ambiguous states. Visual-only changes need not produce DOM mutations, so re-observation at action boundaries is essential. Zero continuous polling is not complete dynamic coverage.
+
+### C11. The Veil-tiny headline overstates its evidence
+
+**High. Sections 18.4 and 21.**
+
+The [Veil-tiny card][S20] verifies 86.83% recall and 33.32% strict leak-free rate at threshold 0.10. It does not establish that this is the best available detector. Its â€œessentially allâ€ coverage criterion was not independently reproduced here. A mask-coverage failure is not equivalent to demonstrated recovery of a private value.
+
+The card explicitly says **downloads are not tracked**. Missing/zero download metadata is not proof of zero adoption. A short public upload history is not proof of abandonment or total development time.
+
+**Correction:** cite these as author-reported results for one small model. Remove â€œbest detector,â€ universal leakage-frequency claims, and â€œzero adoption/abandonedâ€ rhetoric. The registry licensing check did not complete here; require explicit licensing evidence before redistribution rather than relying on the dossier's metadata snapshot.
+
+### C12. Browser support and capture limits need narrower wording
+
+**Medium. Sections 5, 13, 19, and 20.**
+
+The 2/s constant was verified for Chrome's `captureVisibleTab`, not as a universal screen-capture law. It limits capture calls, not inference passes on an existing bitmap, and does not guarantee low CPU usage.
+
+[Firefox 147 release notes][S21] say Apple Silicon WebGPU expanded to all supported macOS versions. The [availability overview][S22] records earlier Firefox 145 support on macOS Tahoe 26 ARM64. Those are compatible, but â€œfirst shipped in 147â€ loses the OS distinction.
+
+**Correction:** use conservative scheduling on both engines while attributing the documented quota to Chrome. Feature-detect and record the actual browser, OS, GPU, driver, backend, and model. Do not treat a static support table as a device test.
+
+### C13. WASM fallback is a deployment experiment, not a checkbox
+
+**High delivery risk. Inference feasibility.**
+
+[ONNX Runtime configuration docs][S23] state that threading requires support and `crossOriginIsolated`. Its proxy-worker mode does not work with WebGPU and can conflict with restrictive CSP. [Chrome CSP docs][S24] distinguish extension and sandbox contexts and the `wasm-unsafe-eval` allowance.
+
+**Correction:** test packaged workers, exact WASM files, quantized operators, single-thread fallback, initialization, GPU loss, and host restart in the final extension. A WebGPU success does not establish that the same artifact works under WASM. GPU limits are not free VRAM, and JS heap is not total browser memory.
+
+### C14. Published metrics are not interchangeable
+
+**High research-quality risk. Sections 7 and 16.**
+
+WebRedact mAP, Veil-tiny pixel metrics, CAPED weighted seeded leakage, GUIGuard recognition, and task success use different definitions and distributions. [Sema][S25] reports hybrid transport results under emulated WAN simulations; its bandwidth reduction is not evidence that privacy-filtered JSON will achieve the same result or be anonymous.
+
+**Correction:** separate external published figures from matched comparisons. Superiority requires the same input set, task set, relevant model settings, metric definitions, and hardware. A list of impressive unrelated numbers is not a comparative experiment.
+
+## 7. What to keep
+
+Keep local vision for rasterized/inaccessible content; structured context first; deterministic identifiers plus learned detection; near-native tiles; consistent identity across perception and execution; local action mediation; independent output checking; cross-engine host adapters; privacy-utility pairing; and the reproducible harness.
+
+A checksum proves structural plausibility, not that an identifier belongs to a real person or is safe to expose. Validity, sensitivity, and authorization must remain separate.
+
+The corrected objective should be **measured reduction of planner disclosure with preserved task utility**, not an absolute guarantee of anonymity or arbitrary-site safety.
+
+## 8. Evaluation protocol needed before claiming superiority
+
+### Freeze units, splits, and denominators
+
+Use a held-out screenshot set for detection/redaction and a separate executable task set for closed-loop behavior. Split by layout family, site, and trajectory, not random screenshots sharing the same template. Separate training, threshold selection, and final evaluation. Document any training overlap of adopted models with benchmark data.
+
+Use synthetic identities for adversarial fixtures. Obtain permission for real-page data. Do not upload real private screenshots to a baseline planner merely to obtain a reference score.
+
+| SIH dimension | Main measurement | Mandatory companion |
+|---|---|---|
+| Visual context, 25% | Grounding accuracy; DOM/vision disagreement; unsupported-region rate | Matched before/after-redaction tasks |
+| PII detection, 20% | Entity/region precision and recall on exhaustively labeled data | Per-class, target-size, partial-entry, and language results |
+| Redaction, 20% | Sensitive-pixel coverage and non-sensitive-pixel removal | Exact leak-free definition and adversarial recoverability |
+| Resources, 20% | Download bytes, peak memory, CPU time, idle overhead | Hardware/browser/backend manifest and missing-measurement labels |
+| Latency, 15% | Task-completion time and stage p50/p95 | Cold/warm separation; failed, refused, and timed-out cases |
+
+### Define privacy metrics precisely
+
+For sensitive ground-truth mask `G` and opaque redaction mask `R`:
+
+```text
+sensitive-pixel coverage = |G intersect R| / |G|
+over-redaction rate      = |R outside G| / |all non-sensitive pixels|
+```
+
+Predeclare treatment of images with no sensitive regions and the tolerance for a strict coverage criterion. Keep these outcomes separate:
+
+- Coverage failure: a sensitive region remains partly unmasked.
+- Recoverability failure: an attacker actually extracts a protected value/attribute.
+- Gate escape: an unsafe artifact is transmitted despite the verifier.
+- False block: a safe artifact is refused.
+- Task failure: the requested workflow does not complete.
+
+Zero observed failures does not prove zero risk. Publish denominators and uncertainty intervals. For illustration, zero failures in 100 independent trials gives an approximate rule-of-three upper bound of 3%, not proof of less than 1%. Correlated screenshots need trajectory-aware analysis.
+
+### Use matched baselines and ablations
+
+1. Raw-context planner on synthetic/non-sensitive fixtures only.
+2. DOM rules only.
+3. Local OCR plus PII detection and opaque masking.
+4. Proposed pipeline without runtime verification.
+5. Full pipeline.
+6. Full blackout/no-disclosure control to expose metric gaming.
+
+Optional ablations: tiled versus untiled detection, plain placeholders versus destination-scoped grants, full recomputation versus validated tile reuse, and structured-only versus redacted-image context.
+
+Use the same planner and tasks for privacy comparisons. Disable demo-specific progress overrides. Count refusals and unsupported operations rather than dropping them.
+
+### Attack the final transmitted artifact
+
+Tests should include secrets in tasks/labels/URLs/errors; partial masking; tiny text and avatars; QR/signature regions; JSON-clean/image-unsafe and the inverse; replay and unused-grant races; wrong-origin and replaced-node actions; navigation between capture and execution; GPU loss and worker restart; verifier timeout; dependency egress; model provisioning during sensitive tasks; and malicious pages requesting a different destination.
+
+Use different OCR/recognition methods for offline attacks where feasible. Conservative withholding is more credible than claiming a text scan verified a non-text privacy class.
+
+## 9. What would make this a competitive SIH submission
+
+The differentiator should be evidence, not a longer model list.
+
+A convincing demonstration would run actual local vision on a non-DOM text region, sanitize it, show the outgoing context, obtain an action from an offline-deployable open-weights planner, execute it with current-target and destination checks, and then block a deliberately corrupted output. Repeat the supported path in Chrome and Firefox and show the measured privacy-utility trade-off.
+
+An unseen normal page chosen by a judge is useful for generalization testing, but is not a promise of universal automation. Unsupported actuation should produce an honest handoff.
+
+**Scope recommendation:** prove one complete, measured path on both engines first. Defer optional VLM escalation, persistent secret vaults, broad cross-site value transfer, arbitrary navigation, and continuous dynamic-media support. Keep performance targets visibly distinct from measurements.
+
+### Better pitch language
+
+> We combine browser-local visual perception with policy-controlled remote planning and locally authorized execution. We measure both the private information recoverable from transmitted context and the task utility retained, across Chrome and Firefox.
+
+Use present tense only for implemented/measured behavior. Until then, say â€œwe proposeâ€ or â€œwe are building.â€
+
+Avoid â€œthe server learns nothing,â€ â€œexfiltration is impossible,â€ â€œa stolen plan is inert,â€ â€œour types cannot contain PII,â€ â€œthe best detector leaks two screenshots in three,â€ and â€œnobody has browser-resident screenshot privacy.â€ Do not claim DPDP compliance or ISRO approval without the relevant validation.
+
+## 10. Architecture go/no-go checklist
+
+Before creating an authoritative architecture from the dossier, resolve:
+
+| Decision | Required resolution |
+|---|---|
+| Privacy boundary | Planner nondisclosure versus authorized task-site disclosure |
+| Trusted components | Explicit assumptions about compromised pages, dependencies, extension, browser, and OS |
+| Safe payload | Runtime-validated envelope; approval bound to final bytes |
+| Capabilities | Stable references separate from expiring, one-action, destination-bound grants |
+| Uncertainty | Defined behavior for disagreement, unsupported regions, and non-text PII |
+| Execution | Supported action matrix and manual handoff conditions |
+| Lifecycle | Snapshot freshness, invalidation, restart, and replay behavior |
+| Runtime/model | Exact artifact, license, preprocessing, operator support, bytes, and tested backend |
+| Provisioning | Audited model loading without accidental user-content transmission |
+| Evaluation | Matched baselines, frozen splits, failure accounting, and uncertainty intervals |
+
+**Bottom line:** the direction deserves a prototype. The current document does not deserve an unqualified â€œsuperior researchâ€ label. Correct the security reasoning and prior-art claims, then build the smallest version whose privacy-utility trade-off can actually be measured.
+
+## 11. Evidence ledger
+
+Successful reads below were performed for this review on 6 September 2026. Published/README results were not independently reproduced.
+
+| ID | Source and evidence |
+|---|---|
+| S1 | SIH26171 community mirror: requirements, weights, displayed deadline; official page retrieval unsuccessful. |
+| S2 | WebPII paper: abstract and substantial body text; reported detector results. |
+| S3 | GUIGuard paper: current counts, annotation caveat, planner-fidelity limitation. |
+| S4 | CAPED paper: seeded leakage, broad utility cost, prototype deployment caveat. |
+| S5 | Available but Invisible: consistency, session mapping, proxy, gatekeeper. |
+| S6 | FastVLM ONNX card: quantization and browser example. |
+| S7 | Chrome tabs API: capture quota and API scope. |
+| S8 | Chrome offscreen API: host and lifecycle constraints. |
+| S9 | MDN background manifest: cross-browser behavior. |
+| S10 | image-pii-redactor README: browser-local OCR/NER and redaction. |
+| S11 | BlackBar README: extension controls and explicit detection limits. |
+| S12 | BlackBar no-network test: source inspected, not executed. |
+| S13 | safeclipper README: privacy/utility QA evaluation, not reproduced. |
+| S14 | RunAnywhere article: vendor-described local agent, not independent performance evidence. |
+| S15 | Safe-Screen README and `src/actionGuard.ts`: substitution and remote vision mode. |
+| S16 | image-pii-redactor service worker: source-level network-filter limitations. |
+| S17 | MDN CORS: simple-request transmission versus response-read permission. |
+| S18 | MDN Event.isTrusted: synthetic event limitations. |
+| S19 | MDN content scripts: privileges, restrictions, DOM access. |
+| S20 | Veil-tiny card: metrics and untracked downloads; registry API check unsuccessful. |
+| S21 | Firefox 147 release notes: Apple Silicon support expansion. |
+| S22 | WebGPU overview: earlier Firefox 145 Tahoe support; not a current device test. |
+| S23 | ONNX Runtime flags: threads, isolation, workers, matching runtime artifacts. |
+| S24 | Chrome extension CSP: scope and WASM allowance. |
+| S25 | Sema paper: hybrid transport and simulated-WAN result context. |
+| S26 | CaMeL paper: capability/data-flow enforcement and threat-model limitations. |
+| S27 | ONNX Runtime WebGPU guide: provider configuration and tensor lifecycle; browser-support text may lag releases. |
+
+Repository reads returned these snapshots for reproducibility:
+
+```text
+athal7/image-pii-redactor: 4573a6d0327bcc4f5cc182ea481132c610fc7ede
+zatuomfawas/BlackBar:     516f1717328541ab4720d574130fcf3b05e5cc1c
+afk-surf/safeclipper:     17f9a82073ced5004f00769df6ec632b51be084a
+thesid42/Safe-Screen:    a5790421ee4ce74606fb08e2cc475e0c1d4a4d0b
+```
+
+Do not infer historical priority or feature creation dates solely from these current reads. This review assesses material accessible at review time.
+
+[S1]: https://sih2026.vuce.in/ps/SIH26171
+[S2]: https://arxiv.org/abs/2603.17357
+[S3]: https://arxiv.org/abs/2601.18842
+[S4]: https://arxiv.org/abs/2606.12666
+[S5]: https://arxiv.org/abs/2602.10139
+[S6]: https://huggingface.co/onnx-community/FastVLM-0.5B-ONNX
+[S7]: https://developer.chrome.com/docs/extensions/reference/api/tabs
+[S8]: https://developer.chrome.com/docs/extensions/reference/api/offscreen
+[S9]: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/background
+[S10]: https://github.com/athal7/image-pii-redactor
+[S11]: https://github.com/zatuomfawas/BlackBar
+[S12]: https://github.com/zatuomfawas/BlackBar/blob/516f1717328541ab4720d574130fcf3b05e5cc1c/test/no-network.test.mjs
+[S13]: https://github.com/afk-surf/safeclipper
+[S14]: https://www.runanywhere.ai/blog/on-device-browser-agent
+[S15]: https://github.com/thesid42/Safe-Screen
+[S16]: https://github.com/athal7/image-pii-redactor/blob/4573a6d0327bcc4f5cc182ea481132c610fc7ede/public/pii-redactor-sw.js
+[S17]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+[S18]: https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted
+[S19]: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts
+[S20]: https://huggingface.co/Parergon/Veil-tiny
+[S21]: https://www.firefox.com/en-US/firefox/147.0/releasenotes/
+[S22]: https://web.dev/blog/webgpu-supported-major-browsers
+[S23]: https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html
+[S24]: https://developer.chrome.com/docs/extensions/reference/manifest/content-security-policy
+[S25]: https://arxiv.org/abs/2604.20940
+[S26]: https://arxiv.org/abs/2503.18813
+[S27]: https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html

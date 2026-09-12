@@ -1,0 +1,9 @@
+{
+  "name": "@antardrishti/planner-server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "python server.py",
+    "dev": "python server.py --reload"
+  }
+}

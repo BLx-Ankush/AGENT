@@ -1,0 +1,1777 @@
+# Implementation Architecture: ANTARDRISHTI
+
+**Problem statement:** SIH26171, On-device Visual Perception for Light-weight Browser Agents  
+**Organization:** Indian Space Research Organisation (ISRO), Department of Space  
+**Artifact:** Implementation architecture and phase-wise build plan  
+**Version:** 1.0  
+**Prepared:** 11 September 2026  
+**Status:** Build-ready architecture, subject to measured model bake-offs
+
+> ANTARDRISHTI is not "another browser agent." It is a browser-resident privacy and control plane for a hybrid agent. Raw screen state stays local, the remote planner receives a deliberately minimized and verified representation, and every returned action is authorized and executed locally.
+
+---
+
+## 1. Executive decision
+
+Build a **structured-first, vision-required, privacy-gated browser agent** with one hard architectural boundary:
+
+> **Raw screenshots and policy-protected values must never cross the browser-to-planner boundary. Every server-visible byte must be created by the sanitizer, validated against an exact schema, scanned by an independent egress verifier, and linked to an explicit disclosure reason.**
+
+The implementation should keep the strong parts of the supplied research and flow chart, while correcting claims that would fail a serious security review:
+
+1. **CORS is not a confidentiality boundary.** A browser may transmit requests even when JavaScript cannot read the response. The implementation must rely on constrained extension architecture, a single egress module, strict destination policy, runtime payload validation, instrumented tests, and build-time inspection.
+2. **TypeScript types cannot identify secrets.** Opaque brands and private constructors reduce accidental misuse, but runtime scanning and approval of the exact serialized bytes are mandatory.
+3. **A destination allowlist is not a content policy.** The planner origin can still receive sensitive content by mistake. The egress verifier must inspect content, metadata, task text, later turns, and optional images.
+4. **"Never leaves the device" must name the recipient.** Protected values may be disclosed to an authorized task website when the user asks the agent to fill or submit them. They must not be disclosed to the remote planner. Typing into a website is already disclosure to that website.
+5. **A placeholder is not automatically a capability.** Redemption grants must be short-lived, single-use, atomically consumed, and bound to the session, tab, frame, document generation, target origin, target element, operation, and action nonce.
+6. **DOM agreement is evidence, not proof.** Painted pixels can disagree with DOM text because of canvas, pseudo-elements, overlays, transformed children, background images, cross-origin frames, or malicious accessibility labels.
+7. **A second OCR pass is not a zero-leak certificate.** Faces, signatures, QR payloads, IDs, contextual clues, low-contrast text, and unknown sensitive categories require separate handling and conservative blocking.
+8. **Actuation is not universal.** Synthetic events are untrusted, browser pages and native dialogs are restricted, and some sites reject scripted interaction. Unsupported actions must stop or hand control to the user.
+
+This architecture directly targets all five published evaluation dimensions: visual context accuracy, PII detection, redaction precision, client resource use, and end-to-end latency.
+
+---
+
+## 2. Inputs reconciled
+
+This specification reconciles four supplied artifacts:
+
+- [Research dossier](https://t90122052937.p.clickup-attachments.com/t90122052937/3aa77ffc-d000-4454-bfaa-bab725793520/Research.md): extensive prior art, browser constraints, architecture variants, and evaluation ideas.
+- [Independent research critique](https://t90122052937.p.clickup-attachments.com/t90122052937/27d36072-ee9a-49fc-ae4a-915576ec4c44/research%20fact.txt): security corrections, missing prior art, feasibility cautions, and a stronger evaluation protocol.
+- [Architecture flow chart](https://t90122052937.p.clickup-attachments.com/t90122052937/80810b89-0dbb-4674-a0db-7eab59173f06/image.png): local perception and privacy boundary, egress gate, remote reasoner, local action safety gate, and token vault.
+- [SIH presentation](https://t90122052937.p.clickup-attachments.com/t90122052937/cad41c9a-3589-42e6-bea5-39a715e00b04/SIH2026-PS171-Honoured%20Ones.pptx): ANTARDRISHTI product framing, proposed stack, feasibility story, and benchmark positioning.
+
+The supplied flow is directionally right. The implementation below makes its trust boundaries, data contracts, freshness model, action authorization, and failure behavior explicit enough to build and test.
+
+### 2.1 Problem statement interpretation
+
+The detailed SIH26171 mirror describes a Chrome and Firefox prototype that:
+
+- runs a local ViT or equivalent computer-vision model in the browser;
+- dynamically detects and sanitizes sensitive visual information before network transmission;
+- sends anonymized context to a central LLM or VLM;
+- receives actionable commands and executes them in the browser;
+- balances accuracy with local resource use and latency.
+
+A DOM-only system is therefore insufficient. A giant local VLM is also unnecessary. A real local vision path can be formed from text-region detection, OCR, face detection, visual grounding, and limited VLM escalation.
+
+### 2.2 Defensible novelty
+
+Do not claim invention of local inference, screenshot redaction, placeholders, GUI privacy, or browser automation. The credible contribution is:
+
+> **A measured cross-engine integration of browser-local visual privacy, task-aware context minimization, independently verified egress, target-bound local capability redemption, and safe local execution.**
+
+That is stronger than a broad "first ever" claim because judges can inspect and reproduce it.
+
+---
+
+## 3. Goals, non-goals, and success definition
+
+### 3.1 Product goals
+
+1. Perceive the visible browser state using DOM, reconstructed accessibility semantics, and pixels.
+2. Detect text PII, credentials, secrets, faces, QR codes, signatures, and identity-document regions locally.
+3. Preserve enough task-relevant semantics for a remote open-weight planner to produce useful actions.
+4. Prevent raw screenshots and protected values from reaching the planner.
+5. Execute only a small, typed, locally validated action language.
+6. Support Chrome and Firefox through explicit host adapters.
+7. Measure privacy and utility together on the same traces.
+8. Fail closed on ambiguity, stale observations, unsupported surfaces, and verifier disagreement.
+
+### 3.2 Non-goals for the SIH release
+
+- Universal automation across every website.
+- Native browser dialogs, browser settings pages, operating-system UI, or privileged pages.
+- CAPTCHA solving or bypassing anti-bot controls.
+- Autonomous payments, purchases, irreversible submissions, account deletion, or consent acceptance without user confirmation.
+- A claim of zero inferential disclosure. Sanitized context can still reveal relationships and context.
+- A compliance certification or production DLP guarantee.
+- Training a new foundation model.
+- Depending on WebMCP for the universal path. As of September 2026 it remains a proposed standard under an origin trial and has no Firefox parity.
+
+### 3.3 MVP success criteria
+
+The MVP is complete only if all of the following hold:
+
+- Chrome and Firefox complete at least three representative workflows.
+- At least one workflow contains visual content that DOM extraction alone cannot perceive.
+- The network transcript contains no raw screenshot, raw protected value, secret-bearing URL/query, or unsanitized task text.
+- Every outbound request is emitted by the egress module after independent verification.
+- High-impact actions require explicit local confirmation.
+- Stale action plans are rejected after navigation or relevant UI change.
+- The same evaluation harness reports privacy, utility, latency, CPU, memory, and transmitted bytes.
+
+---
+
+## 4. Architecture overview
+
+### 4.1 Trust zones
+
+| Zone | Components | Trust level | Sensitive data allowed? |
+|---|---|---:|---|
+| Z0: Web page | Site DOM, page scripts, frames, rendered UI | Untrusted | Yes, controlled by the site |
+| Z1: Local page adapter | Content script, DOM/A11y harvester, local executor bridge | Trusted but exposed to hostile page state | Yes, in memory only |
+| Z2: Local perception enclave | Capture adapter, tile engine, OCR, CV, NER, scene graph | Trusted | Yes, in memory and bounded local cache |
+| Z3: Local privacy control plane | Policy engine, token vault, serializer, verifier, egress gate, action safety gate | Highest local trust | Yes, never serialized raw |
+| Z4: Planner service | API, planner model, session store | Honest-but-curious and compromise-tolerant | Sanitized representation only |
+| Z5: Authorized destination | Website the user intentionally operates | Destination-specific trust | Only values explicitly authorized for that origin/action |
+
+The key distinction is between **the planner** and **the task website**. Filling an email into a trusted booking site discloses the email to that site. ANTARDRISHTI's promise is that the planner does not receive the raw email.
+
+### 4.2 System context
+
+```mermaid
+flowchart LR
+  U[User intent] --> B[Browser extension]
+  P[Untrusted web page] --> B
+  B -->|sanitized observation only| G[Egress gate]
+  G -->|HTTPS JSON| R[Remote planner]
+  R -->|typed action plan| S[Local safety gate]
+  S -->|authorized action| P
+  S -->|confirm or handoff| U
+  V[(Local token vault)] --> S
+  B -. raw pixels and protected values remain local .-> V
+```
+
+### 4.3 Local component architecture
+
+```mermaid
+flowchart TB
+  subgraph PAGE[Page-side adapter]
+    CS[Content script]
+    DH[DOM and A11y harvester]
+    EX[Execution adapter]
+  end
+
+  subgraph HOST[Extension host adapter]
+    SW[Coordinator]
+    CA[Capture adapter]
+    OS[Offscreen or extension inference page]
+  end
+
+  subgraph PERCEPTION[Local perception]
+    RT[Risk and necessity router]
+    TE[Tile and change engine]
+    CV[Text, face, QR, document detectors]
+    OCR[OCR and visual reader]
+    NER[PII, secret, and contextual classifiers]
+    SG[Unified scene graph]
+  end
+
+  subgraph PRIVACY[Privacy control plane]
+    PE[Policy engine]
+    TV[Local token vault]
+    SR[Sanitized representation builder]
+    EV[Independent egress verifier]
+    EG[Egress gate]
+    AS[Action safety gate]
+  end
+
+  CS --> DH --> RT
+  SW --> CA --> TE
+  RT --> TE --> CV --> OCR --> NER --> SG
+  DH --> SG
+  SG --> PE --> TV
+  PE --> SR --> EV --> EG
+  EG --> REMOTE[Remote planner]
+  REMOTE --> AS
+  TV --> AS
+  AS --> EX --> CS
+```
+
+### 4.4 End-to-end sequence
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Page as Page adapter
+  participant Coord as Local coordinator
+  participant Percept as Perception pipeline
+  participant Policy as Privacy engine
+  participant Gate as Egress verifier/gate
+  participant Planner as Remote planner
+  participant Safety as Action safety gate
+  participant Vault as Token vault
+
+  User->>Coord: Submit task
+  Coord->>Policy: Sanitize task text locally
+  Page->>Coord: DOM/A11y snapshot + document generation
+  Coord->>Percept: Capture visible tab and changed tiles
+  Percept->>Policy: Unified scene graph with evidence
+  Policy->>Vault: Store protected values and target bindings
+  Policy->>Gate: Candidate sanitized envelope
+  Gate->>Gate: Schema, exact-byte, text, image, metadata checks
+  alt verification fails or evidence is ambiguous
+    Gate-->>User: Block, explain locally, request review
+  else verification passes
+    Gate->>Planner: Sanitized envelope only
+    Planner-->>Safety: Typed action plan
+    Safety->>Safety: Validate plan, origin, freshness, risk, nonce
+    alt value redemption required
+      Safety->>Vault: Redeem scoped grant atomically
+      Vault-->>Safety: Value for exact authorized target
+    end
+    alt high-impact action
+      Safety-->>User: Confirm exact effect and destination
+      User->>Safety: Approve or deny
+    end
+    Safety->>Page: Execute one action
+    Page-->>Coord: Outcome evidence
+    Coord->>Coord: Re-observe before next action
+  end
+```
+
+---
+
+## 5. Core invariants
+
+These are implementation rules and test oracles, not marketing claims.
+
+### I-01: Planner exclusion
+
+No raw framebuffer, raw protected field value, vault entry, unsanitized task span, or detailed private log may be serialized into a planner request.
+
+### I-02: Exact-byte approval
+
+The verifier approves the **final byte sequence** that the transport sends. The transport must not enrich, re-encode, append metadata, follow redirects, or change destination after approval.
+
+### I-03: Single egress path
+
+Planner traffic originates from one module and one method. The final extension bundle is scanned for network primitives, remote resources, dynamic script creation, and unexpected URLs. Runtime tests instrument all relevant channels.
+
+This is defense in depth, not a mathematical proof of complete mediation. Browser navigation, forms, images, fonts, media, WebSocket, beacon, EventSource, WebRTC, DNS-prefetch-like behavior, dependency code, and page-side requests must be considered in tests.
+
+### I-04: Observation freshness
+
+Every scene graph and action plan is bound to:
+
+- `sessionId`
+- `tabId`
+- `frameId`
+- `documentGeneration`
+- `viewportFingerprint`
+- `observationId`
+- `origin`
+- `createdAt`
+
+An action is rejected if any binding is stale or mismatched.
+
+### I-05: Local authority
+
+The planner proposes. Only local policy authorizes. The executor cannot run arbitrary code, CSS selectors from the model, JavaScript, shell commands, or unrestricted URLs.
+
+### I-06: Conservative ambiguity
+
+Unknown, unsupported, contradictory, or unreadable regions are omitted, masked, or held for local review. They are never silently classified as safe.
+
+### I-07: One action, then re-observe
+
+The executor performs at most one state-changing action before capturing fresh outcome evidence. Multi-action plans are queued but individually revalidated.
+
+### I-08: Recipient-aware disclosure
+
+Every disclosure decision records recipient, purpose, category, necessity, and retention class. A value allowed for the task website is not automatically allowed for the planner.
+
+---
+
+## 6. Local perception pipeline
+
+### 6.1 Event and risk router
+
+The router replaces continuous frame processing with event-driven perception.
+
+**Triggers:**
+
+- explicit user task or retry;
+- top-level navigation and history-state change;
+- frame navigation;
+- debounced DOM mutation affecting visible or interactive nodes;
+- focus or form-state change;
+- viewport resize, zoom, scroll completion, or device-pixel-ratio change;
+- action completion;
+- detected visual-only change when a streamed or animated region is active.
+
+**Coalescing policy:**
+
+- settle window: initial target 120 to 250 ms, measured and tuned;
+- maximum normal capture rate: 1 per settled state;
+- never design around more than the documented `captureVisibleTab` ceiling of roughly 2 calls per second;
+- cancel superseded perception jobs;
+- preserve latest high-risk job over low-risk background work.
+
+**Risk classes:**
+
+| Risk | Typical evidence | Perception route |
+|---|---|---|
+| Low | Static text, buttons, navigation, no forms | DOM/A11y plus spot visual consistency check |
+| Medium | Images, canvas, PDF viewer, cross-origin frame, OCR-needed region | DOM/A11y plus changed-tile CV and OCR |
+| High | Login, payment, identity, health, OTP, private message, upload, destructive action | Full visible-state scan, strict masking, verifier escalation, confirmation |
+
+The router must not use the remote planner to decide whether the raw state is sensitive. That decision is local by construction.
+
+### 6.2 DOM and reconstructed accessibility harvest
+
+The content script collects only viewport-relevant state:
+
+- tag, role, accessible name, label association, description;
+- visible text and editable value classification;
+- input type, autocomplete hints, validation state;
+- focusability, disabled/read-only state, tab order;
+- bounding rectangle, clipping, z-index summary, opacity, visibility;
+- form and landmark ancestry;
+- frame identity and origin class;
+- open shadow-root traversal where allowed;
+- event target stability hints;
+- mutation version.
+
+Do not claim access to the browser's native accessibility tree. The extension reconstructs accessibility-like semantics from DOM and ARIA.
+
+**Immediate sensitive hints:**
+
+- `input[type=password]` and reveal-password states;
+- autocomplete values such as `cc-number`, `one-time-code`, `email`, `tel`, `street-address`;
+- labels containing credential, banking, identity, health, student, employee, or government terms;
+- editable fields holding values not present in initial page markup;
+- hidden inputs, data attributes, and page-local storage are not exported.
+
+### 6.3 Screen capture and tile engine
+
+The host adapter captures only the active visible tab after the required user gesture and permissions. Each capture receives:
+
+```text
+CaptureStamp = hash(
+  tabId,
+  frameTreeGeneration,
+  topOrigin,
+  documentGeneration,
+  viewportWidth,
+  viewportHeight,
+  devicePixelRatio,
+  zoom,
+  scrollX,
+  scrollY,
+  capturedAt
+)
+```
+
+The tile engine:
+
+1. partitions the screenshot at native or near-native resolution;
+2. computes exact hashes for security-sensitive cache reuse and perceptual hashes only for scheduling hints;
+3. identifies changed tiles;
+4. expands changed regions by a safety margin to avoid clipping text or faces;
+5. invalidates all tiles on navigation, zoom, scale, or document-generation changes;
+6. never treats a cache hit as proof that no secret appeared without a matching freshness stamp.
+
+Do not downscale the whole 1920x1080 screen to a small model input and assume tiny PII survives. A 10 px account number can collapse to unreadable pixels. Run detectors on tiles and report performance by object size band: under 16 px, 16 to 48 px, and over 48 px on the shorter dimension.
+
+### 6.4 Deterministic recognizers
+
+Run cheap recognizers before neural models. Each finding includes category, span, validation method, confidence, recipient policy, and evidence source.
+
+**Checksum-backed candidates:**
+
+- payment cards using Luhn;
+- Aadhaar-like identifiers using Verhoeff only when format and context also fit;
+- IBAN using MOD-97;
+- other identifiers only when a published validation rule exists.
+
+**Structure and context candidates:**
+
+- email, phone, postal address, date of birth;
+- PAN, IFSC, account and transaction identifiers;
+- OTP and 2FA codes;
+- API keys, JWTs, private-key headers, cloud credentials;
+- passwords and revealed password fields;
+- health, education, employment, and financial attributes;
+- page titles, URLs, query parameters, error messages, and task text.
+
+Avoid calling pattern matches "verified" when they have no checksum. Carry the validation tier into the scene graph.
+
+### 6.5 Visual detectors
+
+The MVP uses a detector ensemble, not a single all-knowing VLM.
+
+| Detector | Purpose | MVP candidate | Acceptance test |
+|---|---|---|---|
+| Text-region detector | Locate rendered text not reliably mapped to DOM | Compact PP-OCR/DBNet-style ONNX detector | Recall by text-height band on held-out pages |
+| OCR recognizer | Read localized text | Compact multilingual ONNX OCR model | Character error rate plus PII-span recall |
+| Face detector | Locate faces and avatars | MediaPipe face detector, with small-face fallback bake-off | Recall under 16, 16-48, and over 48 px |
+| QR/barcode detector | Locate and decode payload locally | ZXing/WASM or equivalent | Exact payload recovery on synthetic suite |
+| Document/signature detector | Conservatively identify IDs and signatures | Lightweight object detector or layout heuristics | Region recall prioritized over precision |
+| Grounded visual reader | Rare semantic escalation | Florence-2 class or smaller measured alternative | Grounding accuracy within resource budget |
+
+**Model selection rule:** no candidate is architectural until it passes the same Chrome/WebGPU, Chrome/WASM, Firefox/WebGPU, and Firefox/WASM harness. Model cards are feasibility evidence, not deployment evidence.
+
+**Recommended MVP order:**
+
+1. deterministic rules plus DOM evidence;
+2. text-region detection and OCR;
+3. face detection;
+4. compact NER over OCR and DOM text;
+5. optional grounding model only for unresolved task-necessary regions;
+6. optional local VLM as a stretch feature, never a blocker for the core demo.
+
+A 0.5B VLM can be tested, but it should not be the default hot path until memory, cold-start, and Firefox fallback are measured. The browser's worst supported configuration, not the fastest developer laptop, sets the product boundary.
+
+### 6.6 DOM-pixel reconciliation
+
+The unified scene graph uses one ID space for structural nodes, visual regions, redaction masks, and action targets.
+
+**Authority rules:**
+
+- pixels are authoritative for what is visibly painted;
+- DOM is authoritative for role, state, and programmatic relationship only when visual evidence is consistent;
+- OCR is authoritative for visual text only above measured confidence and after coordinate mapping;
+- contradiction raises risk rather than selecting the more convenient source;
+- unexplained visible regions remain explicit graph nodes.
+
+Examples of contradiction:
+
+- ARIA name says "Continue" while painted text says "Send payment";
+- DOM text contains no value but an autofill overlay paints an email;
+- a canvas displays a bank statement absent from DOM;
+- a transparent overlay intercepts the click above the visually identified target.
+
+### 6.7 Unified scene graph
+
+```ts
+interface SceneNode {
+  id: string;
+  observationId: string;
+  source: Array<'dom' | 'a11y-reconstructed' | 'ocr' | 'vision'>;
+  frameId: number;
+  documentGeneration: string;
+  originClass: 'top' | 'same-origin-frame' | 'cross-origin-frame' | 'unknown';
+  bbox: { x: number; y: number; w: number; h: number };
+  role?: string;
+  name?: SafeText;
+  state?: Record<string, boolean | number | SafeText>;
+  affordances: Array<'focus' | 'click' | 'type' | 'select' | 'scroll'>;
+  sensitivity: SensitivityFinding[];
+  necessity: 'required' | 'helpful' | 'irrelevant' | 'unknown';
+  conflictFlags: string[];
+  visualEvidenceHash?: string;
+  stableTargetRef?: string;
+}
+```
+
+The graph is ephemeral by default. Persist only redacted metrics and salted hashes needed for regression debugging. Raw screenshots should have a short TTL and be destroyed after the action cycle unless the user explicitly enables a local-only evaluation capture.
+
+---
+
+## 7. Privacy engine
+
+### 7.1 Policy decision model
+
+For every field or region, compute:
+
+```text
+Decision = f(
+  sensitivity category,
+  confidence,
+  task necessity,
+  recipient,
+  origin,
+  action type,
+  user policy,
+  ambiguity,
+  retention class
+)
+```
+
+Allowed decisions:
+
+- `ALLOW_LITERAL`: only for proven non-sensitive content;
+- `ABSTRACT`: retain semantics, remove value;
+- `TOKENIZE`: issue an opaque local redemption reference;
+- `MASK_VISUAL`: replace pixels with a deterministic safe rendering;
+- `OMIT`: remove the node or crop entirely;
+- `ASK_LOCAL`: require user review;
+- `BLOCK`: refuse egress or action.
+
+### 7.2 Recipient-aware policy matrix
+
+| Data class | Remote planner | Authorized task website | Local logs |
+|---|---|---|---|
+| Password, OTP, private key | Never | Ask for exact origin and action; password manager handoff preferred | Category only |
+| Payment card/CVV | Never | Explicit confirmation, field-bound, no autonomous submit | Category and result only |
+| Email/phone/address | Token or semantic label if needed | Allowed only for user-authorized form | Redacted |
+| Face/signature/ID image | Mask or omit | Upload only after explicit user confirmation | No raw copy by default |
+| Non-sensitive UI text | Allowed if task-relevant | Normal | Redacted or aggregate |
+| URL | Origin may be allowed; path/query sanitized | Current destination | Origin only |
+
+### 7.3 Tokenization and local capability vault
+
+Use tokens such as `<SENSITIVE_K7P4>` rather than category-revealing labels like `<HIV_STATUS_01>`. The planner receives only enough shape information to plan, for example `kind: "contact"` when that disclosure is necessary.
+
+A capability record:
+
+```ts
+interface CapabilityGrant {
+  grantId: string;                 // random 128+ bit identifier
+  sessionId: string;
+  tabId: number;
+  frameId: number;
+  documentGeneration: string;
+  targetOrigin: string;
+  targetRef: string;
+  permittedOperation: 'type' | 'select' | 'upload';
+  actionNonce: string;
+  valueRef: string;                // pointer to encrypted local vault value
+  category: string;
+  createdAt: number;
+  expiresAt: number;
+  maxUses: 1;
+  consumedAt?: number;
+}
+```
+
+**Redemption algorithm:**
+
+1. verify the plan signature/session binding;
+2. verify current tab, frame, origin, and document generation;
+3. resolve the target from the stable local reference, never from a model CSS selector;
+4. compare role, name hash, bounding region, and visual evidence;
+5. verify operation and action nonce;
+6. atomically mark the grant consumed;
+7. retrieve the value inside the local executor;
+8. write only to the exact target;
+9. verify the visible result without returning the raw value to the planner;
+10. erase transient plaintext buffers where practical.
+
+A raced, expired, replayed, cross-origin, cross-frame, or post-navigation redemption fails.
+
+### 7.4 Safe visual redaction
+
+Use irreversible replacement in the outgoing image, not blur alone. Blur can be partially reversible and may preserve character shapes.
+
+For each protected region:
+
+- expand the mask by a calibrated margin;
+- fill with a solid pattern or neutral synthetic tile;
+- render an optional generic label locally, such as `PRIVATE FIELD`, only if the label itself is safe;
+- flatten the result into a new pixel buffer;
+- discard hidden layers, EXIF, canvas metadata, OCR text layers, and original image references;
+- re-decode the exact output bytes before verification.
+
+If the visual content is not necessary, omission beats redaction.
+
+### 7.5 Full-envelope sanitization
+
+Sanitize more than node values:
+
+- original user task;
+- page title;
+- URL path, query, fragment, and embedded credentials;
+- node names and labels;
+- crop reason strings;
+- errors and stack traces;
+- capability metadata;
+- action outcomes;
+- prior conversation turns;
+- filenames and upload metadata;
+- timing and identifiers that can correlate a person or session.
+
+The planner gets a locally rewritten task. Example:
+
+```text
+Raw local task:
+"Use Luna Kumar's account 4488123419 to pay â‚¹2,300 to ABC Hospital."
+
+Planner-visible task:
+"Use <SENSITIVE_A8Q2> to pay the specified amount to the task destination."
+```
+
+The local policy may also tokenize the amount or recipient depending on necessity and risk.
+
+---
+
+## 8. Independent egress verifier and gate
+
+### 8.1 Why two components
+
+The **sanitizer creates** the candidate payload. The **verifier distrusts** it. The egress gate sends only after the verifier approves the exact bytes.
+
+Keep the verifier implementation separate from redaction code. Shared detectors can still share blind spots, so use different preprocessing, explicit non-text checks, and adversarial CI tests.
+
+### 8.2 Verification pipeline
+
+```mermaid
+flowchart LR
+  C[Candidate envelope] --> S[Strict schema validation]
+  S --> M[Metadata and URL sanitation]
+  M --> T[Text re-scan]
+  T --> I[Image re-decode and re-OCR]
+  I --> N[Face, QR, document, signature checks]
+  N --> K[Known-secret canary scan]
+  K --> B[Canonical serialization]
+  B --> H[Hash exact bytes and destination]
+  H -->|pass| X[Single transport function]
+  S -->|fail| F[Block locally]
+  T -->|fail| F
+  I -->|fail| F
+  N -->|fail| F
+  K -->|fail| F
+```
+
+**Verifier checks:**
+
+1. Reject unknown fields and wrong types.
+2. Enforce maximum payload, node, crop, and string sizes.
+3. Permit only `https` and an exact configured planner origin.
+4. Reject redirects in the transport path.
+5. Re-scan all strings, including keys where applicable.
+6. Re-decode every image from final encoded bytes.
+7. OCR sanitized images independently and scan recovered text.
+8. Re-run face, QR, and document/signature checks.
+9. Search for exact protected values and normalized variants using local canaries.
+10. Reject raw data URLs, blobs, filesystem handles, extension URLs, and base64 fields outside the crop schema.
+11. Canonically serialize, hash, and seal the destination plus body.
+12. Transport exactly those bytes.
+
+### 8.3 Runtime schemas
+
+Use a runtime validator such as Zod, TypeBox/Ajv, or an equivalent bundled library. The schema must be closed with `additionalProperties: false`.
+
+```ts
+type BrandedSafeText = string & { readonly __brand: 'SafeText' };
+type OpaqueToken = string & { readonly __brand: 'OpaqueToken' };
+
+type ServerValue =
+  | { kind: 'token'; token: OpaqueToken; shape?: BrandedSafeText }
+  | { kind: 'label'; label: BrandedSafeText }
+  | { kind: 'literal'; value: BrandedSafeText };
+```
+
+Only private constructors inside the privacy module can create these brands. This is an anti-accident control, not proof of safety. The verifier remains authoritative.
+
+### 8.4 Network architecture
+
+- Content scripts receive no elevated cross-origin privilege from extension host permissions.
+- Do not treat that as a total exfiltration barrier. Page-equivalent requests and same-origin channels still exist.
+- Extension pages declare the minimum `connect-src` required for the planner and local packaged model resources.
+- Bundle runtime, WASM, tokenizer, and stable model assets. If model download is necessary, pin a manifest and per-file SHA-256 hashes, use a distinct provisioning mode, and never mix model provisioning with user-content transport.
+- No analytics, telemetry, remote fonts, remote scripts, or third-party CDNs in the SIH build.
+- Use the background/extension context as the only planner transport owner.
+
+### 8.5 Build and runtime egress tests
+
+Static grep alone is insufficient. Combine:
+
+- source and minified-bundle inspection;
+- dependency and lockfile review;
+- manifest and CSP checks;
+- remote-code and dynamic-import checks;
+- runtime instrumentation for `fetch`, XHR, WebSocket, EventSource, `sendBeacon`, `fetchLater`, form submission, image/media/resource loads, and navigation attempts;
+- a local test proxy that records every connection and rejects unknown destinations;
+- canary secrets placed in DOM, canvas, CSS, URL, title, ARIA, QR, metadata, and task text;
+- assertion that no canary or normalized variant appears in request bytes, headers, paths, DNS names, or logs.
+
+The honest claim is: **the shipped artifact has a narrowly mediated and continuously tested planner egress path**, not "exfiltration is impossible."
+
+---
+
+## 9. Remote planner
+
+### 9.1 Responsibilities
+
+The remote service may:
+
+- interpret the sanitized task and scene graph;
+- select a known action schema;
+- ask for a new sanitized observation;
+- explain uncertainty;
+- return a user-facing answer based only on sanitized context.
+
+It must not:
+
+- receive or request raw screenshots;
+- request arbitrary DOM extraction;
+- return JavaScript, selectors, shell commands, or arbitrary URLs;
+- redeem local tokens;
+- claim an action succeeded without local outcome evidence;
+- issue more authority than the local policy accepts.
+
+### 9.2 Planner API
+
+`POST /v1/plan`
+
+```json
+{
+  "protocolVersion": "1.0",
+  "session": {
+    "id": "opaque-session",
+    "step": 3,
+    "observationId": "obs-random",
+    "origin": "https://example.org",
+    "documentGeneration": "doc-random"
+  },
+  "task": {
+    "sanitized": "Fill the contact field using <SENSITIVE_K7P4> and continue",
+    "risk": "medium"
+  },
+  "scene": {
+    "nodes": [],
+    "unexplainedRegions": [],
+    "coverage": {}
+  },
+  "allowedActions": ["click", "type_token", "select", "scroll", "wait", "request_observation", "finish"]
+}
+```
+
+Response:
+
+```json
+{
+  "protocolVersion": "1.0",
+  "observationId": "obs-random",
+  "planId": "plan-random",
+  "expiresAt": "2026-09-11T16:05:00Z",
+  "actions": [
+    {
+      "id": "a1",
+      "kind": "type_token",
+      "targetNodeId": "node-42",
+      "token": "<SENSITIVE_K7P4>",
+      "expectedRole": "textbox",
+      "reason": "The task asks for the contact field"
+    }
+  ]
+}
+```
+
+The local client accepts one action, revalidates it, executes it, and re-observes. It does not blindly run the array.
+
+### 9.3 Planner model strategy
+
+Use an adapter so model choice does not leak into the protocol.
+
+**MVP:** a compact offline-deployable instruction model for structured planning over text and JSON.  
+**Optional crop path:** a server VLM only when the client sends a verified sanitized crop.  
+**Deployment:** FastAPI or equivalent, JSON-schema constrained generation, temperature near zero, request size limits, no long-term content retention, and structured audit events without user content.
+
+Candidate open-weight models should be selected through a task-success and latency bake-off on the team's available GPU. Do not lock the architecture to one fashionable model name before measuring it.
+
+### 9.4 Prompt-injection resistance
+
+All page text is untrusted evidence. The planner system contract states that page content cannot change goals, permissions, recipient policy, action schemas, or confirmation requirements.
+
+Local enforcement is still required because prompt text alone is not a security boundary. The action gate rejects:
+
+- targets absent from the current local scene graph;
+- actions not needed for the user task;
+- instructions derived from hidden or visually contradictory content;
+- cross-origin navigation not covered by local policy;
+- actions on nodes marked as prompt-injection risks;
+- attempts to reveal, copy, upload, or transmit protected values outside the approved destination.
+
+---
+
+## 10. Action safety gate and executor
+
+### 10.1 Typed action language
+
+```ts
+type AgentAction =
+  | { kind: 'click'; targetNodeId: string }
+  | { kind: 'focus'; targetNodeId: string }
+  | { kind: 'type_text'; targetNodeId: string; text: SafeText }
+  | { kind: 'type_token'; targetNodeId: string; token: OpaqueToken }
+  | { kind: 'select'; targetNodeId: string; optionId: string }
+  | { kind: 'scroll'; containerNodeId?: string; direction: 'up'|'down'; amount: 'small'|'page' }
+  | { kind: 'wait'; milliseconds: number }
+  | { kind: 'request_observation'; reason: SafeText }
+  | { kind: 'finish'; summary: SafeText };
+```
+
+Not allowed: arbitrary coordinates by default, raw selectors, scripts, `eval`, unrestricted keyboard shortcuts, clipboard reads, file paths, browser commands, downloads, or arbitrary tool calls.
+
+Coordinates can be introduced only as a guarded fallback tied to a current scene node and fresh visual evidence.
+
+### 10.2 Risk policy
+
+| Action | Default policy |
+|---|---|
+| Scroll, focus, open non-destructive control | Auto after freshness check |
+| Type non-sensitive generated text | Auto on approved target |
+| Type tokenized contact value | Auto only when task and destination policy allow |
+| Type password, OTP, payment, identity data | Confirm or handoff |
+| Submit form, send message, publish, upload | Confirm with exact destination and effect |
+| Purchase, payment, account change, deletion, consent | Always confirm; some remain user-only |
+| Download or navigate cross-origin | Confirm or block by policy |
+
+### 10.3 Target resolution
+
+The planner references local node IDs. The client resolves them using:
+
+- frame and document generation;
+- local stable target reference;
+- current role and accessible-name hash;
+- DOM ancestry fingerprint;
+- current bounding rectangle;
+- visual evidence hash;
+- hit-test verification that the node is topmost and interactable.
+
+Before a click, use `elementFromPoint` and overlay checks. Before typing, verify focus landed on the intended target. Abort if the page changed.
+
+### 10.4 Execution adapters
+
+**Universal adapter:** DOM/A11y-based focus, click, type, select, and scroll.  
+**Optional adapter:** WebMCP when a site exposes trustworthy tools and the browser supports the current trial/API.  
+**User handoff:** native dialogs, restricted pages, unsupported frames, anti-automation controls, or actions that cannot be verified.
+
+WebMCP is an optimization, not an architectural dependency. It is a proposed standard, currently under active discussion, and should be behind a feature flag.
+
+### 10.5 Outcome verification
+
+After each action:
+
+1. wait for a bounded settle condition;
+2. increment or observe the document/mutation generation;
+3. capture fresh structural and visual evidence;
+4. compare expected and observed state without exposing protected values;
+5. classify outcome as success, failure, ambiguous, or navigated;
+6. send only a sanitized outcome to the planner;
+7. stop after repeated ambiguity or two failed retries.
+
+Synthetic events have `isTrusted = false`. Sites may reject them. Never report success based only on dispatching an event.
+
+---
+
+## 11. Browser host architecture
+
+### 11.1 Shared core
+
+Use a WebExtensions-compatible TypeScript core with small engine adapters.
+
+```text
+extension/
+  src/
+    core/
+      protocol/
+      scene-graph/
+      privacy/
+      policy/
+      verifier/
+      actions/
+      metrics/
+    adapters/
+      chrome/
+      firefox/
+      webmcp-optional/
+    contexts/
+      content/
+      background/
+      inference-page/
+      side-panel-or-popup/
+```
+
+### 11.2 Chrome
+
+- Manifest V3 service worker coordinates events and owns planner transport.
+- Service workers have no DOM or `window`; inference needing a document/WebGPU context runs in a bundled offscreen document or measured worker arrangement.
+- Offscreen documents support only the extension runtime API, so communicate by typed messages.
+- Persist state needed across service-worker suspension. Never rely on global variables for grants, nonces, or pending confirmation.
+- `activeTab` is preferred over broad host permissions where the demo permits it.
+
+### 11.3 Firefox
+
+- Use the current MV3-compatible background/event-page model through the adapter.
+- Provide an extension page or worker-based inference host rather than assuming Chrome's offscreen API exists.
+- Test WebGPU availability at runtime and record backend selection.
+- Maintain WASM fallback, but treat it as a measured deployment mode, not a checkbox. Operators, memory, threading, CSP, and model size can differ.
+
+### 11.4 Permissions
+
+Start with the minimum:
+
+- `activeTab`
+- `scripting`
+- `storage`
+- `offscreen` on Chrome only if required
+- exact planner host permission, if required by the chosen transport
+
+Avoid `<all_urls>` for the judged build unless a demonstrated requirement justifies it. Display a clear local capture indicator and per-session pause/stop control.
+
+### 11.5 Content security policy
+
+- packaged scripts only;
+- no remote code or `unsafe-eval`;
+- permit WebAssembly only as required by the runtime;
+- exact planner `connect-src` and model provisioning origin if unavoidable;
+- no third-party frames in extension UI;
+- Trusted Types where supported and useful for extension UI sinks.
+
+---
+
+## 12. Data lifecycle and local storage
+
+### 12.1 Storage classes
+
+| Class | Examples | Storage | TTL |
+|---|---|---|---|
+| Ephemeral private | Raw screenshots, OCR text, protected values | Memory; encrypted vault for values | One action cycle or session |
+| Ephemeral safe | Sanitized scene graph, action plan | Memory/session storage | Session |
+| Durable configuration | Policy choices, model version, thresholds | Extension local storage | Until changed |
+| Durable evaluation | Aggregate metrics, redacted traces, hashes | Local opt-in evaluation store | User-controlled |
+| Server operational | Request ID, model version, latency, error class | Server logs without content | Minimal |
+
+### 12.2 Vault design
+
+For the prototype, use an in-memory vault with browser storage only for service-worker survival. Encrypt persisted records with a per-install key protected by the browser's extension storage capabilities where available. Do not overstate this as protection against a fully compromised browser profile.
+
+Never place protected values in:
+
+- console logs;
+- crash reports;
+- planner prompts;
+- analytics;
+- URLs;
+- DOM attributes created by the extension;
+- clipboard unless the user explicitly requests it.
+
+### 12.3 Session destruction
+
+On stop, expiry, tab close, origin change, or extension disable:
+
+- revoke all grants;
+- erase vault records;
+- cancel in-flight inference and network requests;
+- close inference contexts when idle;
+- remove overlays and content-script state;
+- retain only content-free aggregate metrics if enabled.
+
+---
+
+## 13. Repository and module plan
+
+```text
+antardrishti/
+  apps/
+    extension/
+      manifest.chrome.json
+      manifest.firefox.json
+      src/
+        content/
+        background/
+        inference/
+        ui/
+    planner-server/
+      app/
+        api/
+        planner/
+        schemas/
+        safety/
+      tests/
+    eval-dashboard/
+  packages/
+    protocol/
+    scene-graph/
+    pii-rules/
+    policy-engine/
+    privacy-types/
+    sanitizer/
+    egress-verifier/
+    action-gate/
+    browser-adapters/
+    model-runner/
+    telemetry-safe/
+  models/
+    manifests/
+    conversion/
+    licenses/
+    checksums/
+  eval/
+    fixtures/
+    synthetic-pages/
+    traces/
+    canaries/
+    scripts/
+    reports/
+  tests/
+    unit/
+    property/
+    integration/
+    e2e/
+    security/
+    cross-browser/
+  docs/
+    threat-model.md
+    protocol.md
+    model-cards.md
+    support-matrix.md
+    adr/
+  scripts/
+    inspect-bundle.mjs
+    verify-models.py
+    build-chrome.mjs
+    build-firefox.mjs
+```
+
+### 13.1 Package boundaries
+
+- `privacy-types` exposes opaque handles, never raw-vault constructors.
+- `sanitizer` has no network dependency.
+- `egress-verifier` accepts candidate objects and returns sealed bytes or a local error.
+- `planner-server` knows nothing about vault structure.
+- `action-gate` cannot import the network client.
+- `model-runner` exposes backend and resource metrics for every inference.
+
+Enforce boundaries with lint rules, dependency graphs, package exports, and code ownership.
+
+---
+
+## 14. Phase-wise implementation plan
+
+### Phase 0: Scope lock and evidence baseline
+
+**Duration:** 0.5 day  
+**Goal:** prevent architecture drift and unsupported claims.
+
+**Work:**
+
+- Freeze three demo workflows: one ordinary form, one canvas/image/PDF case, one high-risk form with confirmation.
+- Freeze supported Chrome and Firefox versions and test machines.
+- Record problem-statement requirements and five evaluation weights.
+- Create claim ledger: verified, measured, budget, assumption, and non-claim.
+- Choose exact test origins and planner destination.
+- Approve initial threat model and recipient policy.
+
+**Exit gate:** every feature maps to a requirement or judged metric; every public number is sourced or marked as a budget.
+
+### Phase 1: Cross-browser extension skeleton
+
+**Duration:** 1 day  
+**Goal:** reliable event, context, and permission architecture.
+
+**Work:**
+
+- Build shared TypeScript workspace and Chrome/Firefox manifests.
+- Implement user gesture, active-tab permission, pause/stop, and local status UI.
+- Implement Chrome coordinator/offscreen host and Firefox host adapter.
+- Add typed message envelopes with versioning and runtime validation.
+- Persist coordinator state across background suspension.
+- Capture visible tab and attach freshness stamps.
+
+**Exit gate:** identical test command captures and hashes the active viewport in both engines without network access.
+
+### Phase 2: DOM/A11y harvest and scene graph
+
+**Duration:** 1 day  
+**Goal:** cheap structured perception and stable local targets.
+
+**Work:**
+
+- Harvest visible DOM, reconstructed accessibility semantics, form state, geometry, and frame metadata.
+- Implement document generations and mutation versions.
+- Build local node IDs and target fingerprints.
+- Add contradiction and unexplained-region fields.
+- Render a local debug overlay showing node IDs and source evidence.
+
+**Exit gate:** scene graph accurately identifies interactive elements on the three demo workflows and invalidates IDs after navigation.
+
+### Phase 3: Deterministic privacy baseline
+
+**Duration:** 1 day  
+**Goal:** useful protection before neural inference.
+
+**Work:**
+
+- Implement regex, checksum, context, input-type, and autocomplete recognizers.
+- Sanitize task text, title, URL, labels, values, errors, and metadata.
+- Implement policy decisions and safe text constructors.
+- Build local token vault and recipient-aware policy matrix.
+- Add unit and property tests with Indian and global identifier formats.
+
+**Exit gate:** seeded secrets in DOM, URL, title, ARIA, task text, and form values are tokenized or blocked locally.
+
+### Phase 4: Visual perception MVP
+
+**Duration:** 2 days  
+**Goal:** satisfy the local-vision requirement with measurable components.
+
+**Work:**
+
+- Implement native-resolution changed-tile routing.
+- Integrate text-region detection and OCR.
+- Integrate face and QR detection.
+- Add compact PII NER candidate behind a model adapter.
+- Map visual findings into the same scene graph IDs.
+- Measure by object size band.
+
+**Exit gate:** the system detects seeded PII in canvas/images and masks small face/text fixtures at documented recall; DOM-only ablation performs materially worse on the visual workflow.
+
+### Phase 5: Sanitized representation and visual redaction
+
+**Duration:** 1 day  
+**Goal:** create planner-useful context without raw private pixels.
+
+**Work:**
+
+- Implement task-necessity filtering.
+- Create structured-first envelope.
+- Generate irreversible sanitized crops only when necessary.
+- Flatten images and strip metadata.
+- Add local before/after inspector for the demo.
+- Report omitted and ambiguous regions.
+
+**Exit gate:** no raw image bytes or hidden text layer survives into candidate payloads; utility on demo tasks remains acceptable.
+
+### Phase 6: Independent verifier and sealed egress
+
+**Duration:** 1.5 days  
+**Goal:** turn privacy intent into an enforceable send gate.
+
+**Work:**
+
+- Build closed schemas and canonical serializer.
+- Add independent text and metadata scan.
+- Re-decode, re-OCR, and re-detect final image bytes.
+- Add known-secret canary matcher and normalized variants.
+- Hash exact destination and body.
+- Implement one transport function with redirect refusal and strict timeouts.
+- Add static bundle and runtime network tests.
+
+**Exit gate:** corrupted sanitizer fixtures are blocked; only exact verified bytes reach the planner recorder; every seeded egress channel test is accounted for.
+
+### Phase 7: Planner service
+
+**Duration:** 1 day  
+**Goal:** useful plans over sanitized context.
+
+**Work:**
+
+- Implement protocol schemas and FastAPI endpoints.
+- Add constrained structured output.
+- Add sanitized prompt template and page-content distrust rules.
+- Create planner model adapter and deterministic fallback planner for demos/tests.
+- Add request limits and content-free telemetry.
+
+**Exit gate:** server produces valid plans for the three workflows without raw values and rejects malformed or oversized requests.
+
+### Phase 8: Action safety and capability redemption
+
+**Duration:** 1.5 days  
+**Goal:** local authority over every action.
+
+**Work:**
+
+- Implement typed action allowlist.
+- Implement origin, freshness, target, and risk validation.
+- Add atomic single-use grant redemption.
+- Add confirmation UI for submit, send, upload, payment, deletion, and sensitive entry.
+- Implement one-action-then-observe loop.
+- Add outcome verification and user handoff.
+
+**Exit gate:** replay, post-navigation, wrong-frame, wrong-origin, wrong-target, expired, and duplicate actions all fail; high-impact actions never execute without confirmation.
+
+### Phase 9: Evaluation harness and hardening
+
+**Duration:** 2 days  
+**Goal:** produce evidence, not screenshots of claims.
+
+**Work:**
+
+- Integrate benchmark subsets and synthetic UI fixtures.
+- Run Chrome/Firefox and WebGPU/WASM matrix.
+- Measure cold/warm latency, CPU, memory, GPU memory where observable, model load, cache size, payload bytes, and network time.
+- Run matched privacy-utility experiments.
+- Run adversarial egress, prompt-injection, stale-state, overlay, and cache-poisoning tests.
+- Publish support matrix and failure ledger.
+
+**Exit gate:** reproducible report with frozen denominators, matched baselines, confidence intervals where practical, and all failures counted.
+
+### Phase 10: SIH demo polish
+
+**Duration:** 1 day  
+**Goal:** make the architecture inspectable in under three minutes.
+
+**Demo sequence:**
+
+1. Show raw page containing text PII, a face, and a canvas/PDF value.
+2. Turn on ANTARDRISHTI and show local detection overlay.
+3. Show sanitized scene and final transmitted bytes.
+4. Let the planner request a tokenized fill without seeing the value.
+5. Show local target-bound redemption.
+6. Trigger a destructive or submit action and show confirmation.
+7. Modify the page after planning and show stale-plan rejection.
+8. Show the privacy-utility and resource dashboard.
+
+**Exit gate:** demo works from a clean install without devtools edits or hidden manual steps, and a recorded fallback video exists.
+
+---
+
+## 15. Immediate five-day sprint: 12 to 16 September 2026
+
+The current priority is not the optional local VLM. It is the privacy boundary and a measurable end-to-end loop.
+
+| Date | Build focus | Required artifact |
+|---|---|---|
+| Sat 12 Sep | Phase 0 and extension skeleton | Chrome/Firefox capture, typed messages, threat model |
+| Sun 13 Sep | DOM/A11y graph and deterministic PII | Local scene overlay, task/URL/DOM sanitization |
+| Mon 14 Sep | Visual OCR, face/QR path, unified graph | Visual-only PII detected on synthetic page |
+| Tue 15 Sep | Verifier, sealed egress, planner schema | Recorded sanitized request and blocked canary attacks |
+| Wed 16 Sep | Safe executor and demo hardening | One full workflow, metrics snapshot, deck corrections |
+
+**Cut line:** if behind schedule, cut Florence/FastVLM, WebMCP, broad-site support, and fancy UI. Do not cut visual perception, the verifier, freshness binding, or safe execution. Those are the solution.
+
+---
+
+## 16. 36-hour hackathon execution plan
+
+| Hours | Objective | Output |
+|---:|---|---|
+| 0-2 | Environment and model integrity checks | Reproducible build, cached verified models |
+| 2-6 | Cross-browser smoke tests and demo fixtures | Both browsers capture and build scene graphs |
+| 6-11 | Privacy pipeline calibration | Thresholds frozen on validation fixtures |
+| 11-16 | Planner and protocol integration | Valid structured plans over sanitized context |
+| 16-22 | Action gate and confirmation flow | End-to-end workflow with stale-plan rejection |
+| 22-27 | Evaluation matrix and attacks | Privacy-utility, latency, resource, injection results |
+| 27-31 | Bug fixing and fallback paths | Stable three-workflow demo |
+| 31-34 | Presentation and architecture proof | Network trace, manifest, metrics, claim ledger |
+| 34-36 | Rehearsal and freeze | Tagged release, video fallback, no last-minute model swaps |
+
+---
+
+## 17. Evaluation architecture
+
+### 17.1 Freeze units and denominators
+
+Before reporting results, define:
+
+- screenshot, region, entity, node, action, task, and trajectory units;
+- exactly what counts as a PII false positive and false negative;
+- whether partially covered regions count as leaks;
+- OCR normalization rules;
+- unsupported-page accounting;
+- timeouts, retries, confirmation time, and user handoffs;
+- failed model loads and browser crashes;
+- cold versus warm runs.
+
+Do not drop hard examples or average incompatible metrics.
+
+### 17.2 Metric map to SIH weights
+
+| SIH metric | Primary measures | Required breakdown |
+|---|---|---|
+| Visual context accuracy, 25% | node grounding accuracy, role/name accuracy, visual-only region recall, task success | DOM-only vs hybrid; site class; object size |
+| PII recall and precision, 20% | entity precision/recall/F1, region AP, category accuracy | text vs non-text; known vs unknown; size band |
+| Redaction precision, 20% | protected-pixel coverage, over-redaction, strict leak-free rate, residual recovery | mask type; category; OCR/face/QR/document |
+| Client resources, 20% | CPU, memory, GPU memory where visible, model bytes, cache, energy proxy | browser, backend, cold/warm, device tier |
+| End-to-end latency, 15% | p50/p95 total and stage latency | browser, backend, workflow, network excluded/included |
+
+### 17.3 Privacy and utility must be paired
+
+Never report leakage alone. A black screen has perfect privacy and zero utility.
+
+Report these pairs on the same row:
+
+- PII recall/precision with task success;
+- strict leak-free rate with semantic retention;
+- protected-pixel coverage with over-redaction;
+- residual leakage after adversarial extraction with grounding accuracy;
+- transmitted bytes with end-to-end latency.
+
+### 17.4 Matched baselines
+
+Use the same traces, hardware, browser, and timeout policy for:
+
+1. raw screenshot to planner, privacy-unsafe upper utility bound;
+2. DOM-only structured planner;
+3. OCR plus regex redaction;
+4. detector-only visual redaction;
+5. full ANTARDRISHTI cascade;
+6. full cascade without independent verifier;
+7. full cascade without task-necessity filtering;
+8. full cascade with optional grounding/VLM stage.
+
+This isolates which mechanism actually earns accuracy, privacy, and latency.
+
+### 17.5 External datasets and comparables
+
+- **WebPII/WebRedact:** 44,865 synthetic e-commerce UI images; author-reported WebRedact result of 0.753 mAP@50 versus 0.357 for a text-extraction baseline at 20 ms CPU latency.
+- **GUIGuard-Bench:** trajectory-level privacy regions, categories, risk, and task necessity. Pin the exact paper/dataset version because published counts changed across versions.
+- **ScreenSpot/ScreenSpot-Pro:** grounding evaluation, with a web-relevant subset.
+- **VisualWebArena or equivalent:** end-to-end browser task success on a constrained supported subset.
+- **Desktop screenshot privacy fixtures:** useful for adversarial sanitized-image QA, but not interchangeable with WebPII metrics.
+- **Team synthetic suite:** Indian identifiers, tiny text, avatars, QR codes, signatures, CSS overlays, canvas, PDF, cross-origin frames, autofill, revealed passwords, OTP, and multilingual content.
+
+External published numbers are context only until reproduced under matched conditions.
+
+### 17.6 Adversarial egress verification
+
+For every sanitized artifact:
+
+1. attempt OCR at multiple scales and contrast transforms;
+2. run PII/secret recognizers;
+3. decode QR/barcodes;
+4. detect face and document remnants;
+5. template-match known canaries;
+6. query a separate evaluator over the sanitized representation for recoverable ground-truth answers;
+7. record any recovered item as a leak with screenshot/category attribution.
+
+Primary outputs:
+
+```text
+strict_leak_free_rate = artifacts with zero recoverable protected regions / all artifacts
+residual_entity_leakage = recovered protected entities / all protected entities
+over_redaction_rate = masked non-sensitive pixels / all non-sensitive pixels
+utility_retention = sanitized task success / unredacted task success
+```
+
+### 17.7 Resource measurement
+
+Instrument each stage with the Performance API and backend-specific profiling where available. Record:
+
+- extension install size;
+- model download and cache size;
+- model initialization and first inference;
+- warm inference;
+- capture, tiling, detector, OCR, NER, reconciliation, verifier, network, planner, action, and outcome time;
+- peak browser process memory with a documented measurement method;
+- main-thread long tasks and UI responsiveness;
+- number of captures and processed pixels per workflow;
+- transmitted byte reduction versus raw screenshots.
+
+Do not combine Chrome/WebGPU and Firefox/WASM into one flattering average.
+
+---
+
+## 18. Test strategy
+
+### 18.1 Unit tests
+
+- identifier checksums and context rules;
+- safe-string constructors and runtime schemas;
+- policy decisions by recipient and category;
+- token grant creation, expiry, and atomic consumption;
+- URL/title/task sanitization;
+- canonical serialization;
+- action risk classification.
+
+### 18.2 Property and fuzz tests
+
+- arbitrary raw strings cannot pass verifier constructors without scanning;
+- unknown JSON fields always fail;
+- serialization and reparse are stable;
+- one capability cannot be redeemed twice;
+- every mutation of session/tab/frame/origin/generation/target/operation/nonce fails;
+- mask expansion always covers the source region under scale and device-pixel-ratio transforms;
+- URL parser rejects credentialed, malformed, non-HTTPS, and redirecting destinations.
+
+### 18.3 Integration tests
+
+- content script to coordinator message validation;
+- service-worker suspension and resume with pending grants;
+- Chrome offscreen creation race;
+- Firefox inference host lifecycle;
+- WebGPU failure followed by measured fallback;
+- corrupted or swapped model file hash rejection;
+- sanitizer-verifier disagreement blocks egress.
+
+### 18.4 End-to-end tests
+
+Use Playwright plus browser-extension fixtures where supported, and manual scripted validation where extension loading differs.
+
+Scenarios:
+
+- ordinary contact form;
+- checkout with card/OTP confirmation;
+- canvas-rendered account statement;
+- image with face and burned-in text;
+- PDF viewer with identity information;
+- cross-origin iframe;
+- dynamic modal and overlay;
+- visual prompt injection;
+- navigation between plan and action;
+- site rejecting synthetic events;
+- unsupported browser page handoff.
+
+### 18.5 Security tests
+
+- raw screenshot accidentally attached;
+- secret mislabeled as non-sensitive;
+- task contains PII;
+- page title/URL leaks identifiers;
+- OCR misses tiny or rotated text;
+- face detector misses avatar;
+- QR encodes a secret;
+- malicious ARIA disagrees with pixels;
+- redaction layer retains original pixels or metadata;
+- plan replay and race;
+- target replaced after planning;
+- cross-frame and cross-origin confusion;
+- planner returns unknown action or oversized plan;
+- prompt injection requests secret disclosure;
+- dependency attempts unexpected network access;
+- model provisioning endpoint receives user content;
+- logs and error traces contain canaries.
+
+---
+
+## 19. Observability without leakage
+
+Use structured local events with content-free fields:
+
+```json
+{
+  "event": "egress_blocked",
+  "sessionHash": "salted-local-hash",
+  "stage": "visual_verifier",
+  "reasonCode": "FACE_REMAINS",
+  "category": "biometric",
+  "browser": "firefox",
+  "backend": "wasm",
+  "durationMs": 84
+}
+```
+
+Never log raw values, raw screenshots, OCR transcript, full URL, node text, or model prompts. For local debugging, provide an explicit opt-in secure evaluation mode using synthetic data.
+
+The evaluation dashboard should display:
+
+- current browser/backend/model version;
+- stage latency waterfall;
+- processed versus skipped tiles;
+- detection findings by safe category;
+- redaction and verifier decisions;
+- payload size and destination;
+- action validation outcome;
+- privacy-utility metrics.
+
+---
+
+## 20. Deployment architecture
+
+### 20.1 Local extension build
+
+- deterministic lockfile and reproducible build command;
+- separate Chrome and Firefox artifacts from the same source tag;
+- bundled runtime and WASM;
+- signed model manifest with SHA-256 per file;
+- software bill of materials and license ledger;
+- no development endpoints or source maps containing secrets in release package;
+- release bundle inspection as a blocking CI job.
+
+### 20.2 Planner service
+
+```mermaid
+flowchart LR
+  EXT[Extension egress gate] -->|TLS, schema v1| API[Planner API]
+  API --> LIM[Rate and size limits]
+  LIM --> VAL[Schema validator]
+  VAL --> PL[Planner adapter]
+  PL --> MOD[Open-weight LLM/VLM]
+  PL --> OUT[Action schema validator]
+  OUT --> EXT
+  API --> MET[Content-free metrics]
+```
+
+For the hackathon, a single GPU host is enough. The service should also run in a deterministic test mode without a model so the client security path is testable when inference is unavailable.
+
+### 20.3 Failure modes
+
+| Failure | Client behavior |
+|---|---|
+| Model unavailable | Fall back only to a measured lower tier; otherwise stop |
+| WebGPU unavailable | Select measured WASM configuration or disable heavy stage |
+| OCR/CV uncertain | Mask/omit/ask locally |
+| Verifier failure | Block egress, show category-only reason |
+| Planner timeout | Retry once with same sealed payload, then stop |
+| Invalid plan | Reject and log content-free reason |
+| Stale state | Discard plan and re-observe |
+| Unsupported action | User handoff |
+| Website rejects synthetic input | User handoff, never fake success |
+| Browser suspension/restart | Revoke uncertain grants and rebuild state |
+
+---
+
+## 21. Threat model
+
+### 21.1 Assets
+
+- raw screen pixels;
+- protected values and credentials;
+- user task and intent;
+- browsing origin and page metadata;
+- capability grants;
+- action authority;
+- local model integrity;
+- evaluation evidence.
+
+### 21.2 Adversaries
+
+- honest-but-curious planner service;
+- compromised planner or malicious response;
+- malicious webpage and prompt injection;
+- vulnerable extension dependency;
+- accidental developer logging or payload enrichment;
+- network attacker, mitigated by TLS but not trusted as the only control;
+- another extension or compromised browser profile, acknowledged as outside full prototype control.
+
+### 21.3 Major abuse cases and controls
+
+| Abuse case | Primary controls | Residual risk |
+|---|---|---|
+| Raw screen sent to planner | Single egress, closed schema, exact-byte verification, canaries, runtime proxy | Unknown browser/dependency channel |
+| PII missed by detector | Multi-source cascade, non-text detectors, ambiguity blocking, adversarial evaluation | Novel/contextual PII |
+| Planner replays token | Scope bindings, nonce, expiry, atomic use, freshness | In-session race if atomicity is broken |
+| Planner targets wrong node | Local node IDs, target fingerprint, hit testing, re-observation | Highly dynamic UI |
+| Page injects instructions | Treat page as data, local action policy, typed actions | Social engineering of user confirmation |
+| Page swaps target before click | document/mutation generation, hit test, one-action loop | Sub-frame timing race |
+| Authorized site receives secret | Explicit recipient policy and confirmation | Site itself may be malicious or compromised |
+| Model supply-chain swap | Hash-pinned files, license ledger, offline bundle | Compromised build environment |
+| Privacy logs leak data | Content-free events, local-only synthetic debug mode | Developer mistakes |
+
+### 21.4 Security claim boundaries
+
+The prototype does not secure:
+
+- a compromised operating system or browser binary;
+- an authorized website that misuses values the user chose to submit;
+- every possible malicious extension installed in the same profile;
+- inference from all combinations of non-PII attributes;
+- secrets already transmitted by the website before ANTARDRISHTI starts.
+
+Stating these boundaries makes the actual guarantee credible.
+
+---
+
+## 22. Architecture decision records
+
+### ADR-001: Structured-first representation
+
+**Decision:** send a minimized scene graph by default; sanitized crops are exceptions.  
+**Reason:** lower bandwidth, lower planner cost, easier egress verification, and less exposed context.  
+**Consequence:** reconciliation quality and node semantics become critical.
+
+### ADR-002: Detector cascade over default local VLM
+
+**Decision:** use deterministic rules, OCR, compact CV, and NER on the hot path; gate a local VLM behind measured necessity.  
+**Reason:** resource utilization is worth 20%, Firefox/WASM is a real constraint, and detection requires localization rather than generic captioning.  
+**Consequence:** more integration work, but clearer measurements and failure modes.
+
+### ADR-003: Independent verifier
+
+**Decision:** redactor and verifier are separate modules with different processing paths.  
+**Reason:** trusting the component that created the payload is a single point of failure.  
+**Consequence:** extra latency, measured as a deliberate privacy cost.
+
+### ADR-004: Local capability redemption
+
+**Decision:** the planner manipulates opaque tokens; values are restored only in the exact local destination action.  
+**Reason:** preserves utility without planner disclosure.  
+**Consequence:** grants, freshness, recipient policy, and action atomicity are first-class architecture.
+
+### ADR-005: WebMCP is optional
+
+**Decision:** DOM/A11y remains the universal execution path.  
+**Reason:** WebMCP is still a proposed standard/origin trial and lacks cross-engine parity.  
+**Consequence:** use WebMCP only as a feature-flagged reliability optimization.
+
+### ADR-006: Fail closed on unknown visual regions
+
+**Decision:** ambiguous risk-bearing content is masked, omitted, reviewed, or blocked.  
+**Reason:** "not detected" is not "safe."  
+**Consequence:** some workflows hand off to the user; report this honestly in utility metrics.
+
+### ADR-007: One action per observation
+
+**Decision:** re-observe after every state-changing action.  
+**Reason:** plans become stale quickly in dynamic pages.  
+**Consequence:** modest latency increase for much stronger target integrity.
+
+---
+
+## 23. Judge-ready traceability matrix
+
+| Requirement or likely question | Architecture answer | Evidence to show |
+|---|---|---|
+| Where is local vision? | Native-resolution tile CV, OCR, face/QR/document detection, optional grounding | Visual-only fixture and DOM-only ablation |
+| How is PII protected? | Recipient-aware policy, tokenization, irreversible masks | Local before/after and verifier report |
+| How do you know raw data did not leave? | Exact-byte egress seal, one transport, canaries, runtime connection recorder | Final request bytes and bundle inspection |
+| Why use a remote model? | Planning over minimized structured context; local device handles privacy and control | Same workflow with compact server planner |
+| Why not black out everything? | Task-necessity policy and paired utility metrics | Leakage plus task-success chart |
+| What is novel? | Cross-engine measured enforcement integration and target-bound local execution | Prior-art comparison with narrow claim |
+| What if a detector misses? | Independent re-scan, non-text detectors, ambiguity blocking, adversarial CI | Deliberately broken sanitizer blocked |
+| What if the page changes? | Document generation, target fingerprint, one-action loop | Stale-plan demo |
+| What if the planner is malicious? | Typed actions, local policy, no token redemption remotely | Invalid/replay plan rejection |
+| Does it work on Firefox? | Separate host adapter and measured backend matrix | Firefox live demo and report |
+| Is WebMCP required? | No, optional feature flag only | Universal DOM/A11y workflow |
+| Can it fill private values? | Yes, only to an authorized destination through scoped local grants | Tokenized form-fill demo |
+
+---
+
+## 24. Demo workflow design
+
+### Workflow A: Travel or service booking
+
+- Page contains name, email, phone, and an unrelated notification with OTP.
+- Planner needs field structure but not literal values.
+- ANTARDRISHTI tokenizes contact values, omits the unrelated OTP, and fills locally.
+- Submit requires confirmation.
+
+**Proves:** structured-first planning, necessity filtering, capability redemption, confirmation.
+
+### Workflow B: Canvas or PDF account statement
+
+- Account number and address are visually rendered with little usable DOM text.
+- OCR and visual detection find and mask sensitive text.
+- Planner receives safe labels and task-relevant non-sensitive values.
+
+**Proves:** genuine local vision, not decorative DOM parsing.
+
+### Workflow C: Adversarial checkout
+
+- Page contains a prompt-injection banner, hidden ARIA instruction, overlay, card field, and stale navigation.
+- Planner receives sanitized evidence.
+- Local gate rejects injected secret-disclosure action and a plan targeting the pre-navigation node.
+- Payment submit remains user-confirmed.
+
+**Proves:** prompt-injection containment, pixel/DOM disagreement, freshness, high-risk policy.
+
+---
+
+## 25. Product and deck corrections
+
+Use these claims:
+
+- "Raw protected values are withheld from the remote planner."
+- "Only an explicitly minimized and independently verified representation crosses the planner boundary."
+- "Protected values may be disclosed locally to an authorized task website when the user approves that destination and action."
+- "The architecture is cross-engine, with measured WebGPU and WASM modes."
+- "Privacy and utility are reported together."
+- "WebMCP is an optional optimization, not the universal path."
+
+Avoid these claims:
+
+- "Zero leakage" or "structurally impossible to leak."
+- "CORS prevents transmission."
+- "TypeScript makes secrets unrepresentable."
+- "A second OCR pass guarantees safety."
+- "DOM/A11y explains 90%+" without measurement.
+- "WASM fallback works" without a model/operator/resource test.
+- "First browser agent," "first redactor," or "first privacy-preserving GUI agent."
+- Unmatched comparisons between mAP, leakage scores, QA block rates, and task success.
+
+Recommended one-line pitch:
+
+> **ANTARDRISHTI lets a powerful remote model plan over the minimum safe view of a browser while pixels, protected values, authorization, and execution remain under local control.**
+
+---
+
+## 26. Go/no-go gates
+
+### Architecture gate
+
+- [ ] Raw screenshots never appear in planner API types or request captures.
+- [ ] All outbound fields have recipient and necessity rationale.
+- [ ] Verifier scans the exact bytes sent.
+- [ ] Every action is local, typed, freshness-bound, and outcome-checked.
+
+### Feasibility gate
+
+- [ ] Chrome and Firefox install and run from clean profiles.
+- [ ] Selected models run in every claimed backend configuration.
+- [ ] Cold-start memory and p95 latency fit declared budgets.
+- [ ] Visual-only content materially changes perception results.
+
+### Security gate
+
+- [ ] Canary suite covers task, DOM, ARIA, title, URL, canvas, image, QR, metadata, logs, and later turns.
+- [ ] Replay, race, wrong-origin, wrong-frame, and stale-target tests fail safely.
+- [ ] High-impact actions require confirmation.
+- [ ] Model files and dependencies are pinned and licensed.
+
+### Evidence gate
+
+- [ ] Denominators and unsupported cases are frozen.
+- [ ] Privacy and utility are adjacent in every result table.
+- [ ] External numbers are attributed and never presented as reproduced.
+- [ ] All team numbers come from committed scripts and reports.
+
+If any architecture or security gate fails, do not compensate with a prettier demo. Fix the gate.
+
+---
+
+## 27. Final recommended build scope
+
+### Must ship
+
+- Chrome and Firefox adapters;
+- visible-tab capture with freshness stamps;
+- DOM/A11y reconstruction;
+- changed-tile local vision;
+- OCR plus deterministic PII and compact NER;
+- face and QR detection;
+- unified scene graph;
+- recipient-aware policy and token vault;
+- structured-first sanitizer;
+- independent egress verifier;
+- schema-constrained remote planner;
+- typed action gate, confirmation, and one-action loop;
+- privacy-utility and resource evaluation dashboard.
+
+### Should ship
+
+- small-face fallback detector;
+- document/signature conservative detector;
+- sanitized crop path;
+- local debug overlay and network proof panel;
+- model integrity manifest and SBOM.
+
+### Stretch only
+
+- local 0.5B VLM;
+- WebMCP adapter;
+- broad multilingual NER;
+- learned task-necessity model;
+- policy personalization;
+- arbitrary-site autonomous execution.
+
+The winning scope is the smallest system that proves the privacy boundary under attack. A huge model and a flashy agent loop are distractions if the egress path is hand-wavy.
+
+---
+
+## 28. Research references
+
+### Problem and platform
+
+1. [SIH26171 community-maintained detailed mirror](https://sih2026.vuce.in/ps/SIH26171), accessed 11 September 2026. Confirm deadlines and final wording against the official SIH portal or coordinator.
+2. [Smart India Hackathon official site](https://www.sih.gov.in/).
+3. [Chrome tabs API and `captureVisibleTab`](https://developer.chrome.com/docs/extensions/reference/api/tabs).
+4. [Chrome Manifest V3 service-worker migration](https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers).
+5. [Chrome Offscreen API](https://developer.chrome.com/docs/extensions/reference/api/offscreen).
+6. [Chrome extension content security policy](https://developer.chrome.com/docs/extensions/reference/manifest/content-security-policy).
+7. [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/).
+8. [ONNX Runtime WebGPU execution provider](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html).
+9. [ONNX Runtime Web environment flags and session options](https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html).
+10. [Transformers.js WebGPU guide](https://huggingface.co/docs/transformers.js/guides/webgpu).
+11. [WebMCP draft specification](https://webmachinelearning.github.io/webmcp/).
+12. [Chrome WebMCP overview](https://developer.chrome.com/docs/ai/webmcp).
+
+### Privacy and GUI-agent research
+
+13. [WebPII: Benchmarking Visual PII Detection for Computer-Use Agents](https://doi.org/10.48550/arxiv.2603.17357).
+14. [GUIGuard-Bench: Toward a General Evaluation for Privacy-Preserving GUI Agents](https://doi.org/10.48550/arxiv.2601.18842). Pin the exact revision used.
+15. [Available but Invisible: Anonymization-Enhanced Privacy Protection for Mobile GUI Agents](https://doi.org/10.48550/arxiv.2602.10139).
+16. [MaskClaw: Edge-Side Personalized Privacy Arbitration for GUI Agents](https://doi.org/10.48550/arxiv.2605.28646).
+17. [Minim: Privacy-Aware Minimal View for Agents via Trusted Local Sanitization](https://doi.org/10.48550/arxiv.2606.13949).
+18. [safeclipper](https://github.com/afk-surf/safeclipper), useful prior art for local screenshot redaction and privacy-utility evaluation.
+19. [PII Guardrail Browser Extension](https://github.com/dfki-dsa/pii-guardrail-browser-extension), useful prior art for local text PII detection, placeholders, and browser resource constraints.
+
+### Supplied project evidence
+
+20. [Research.md](https://t90122052937.p.clickup-attachments.com/t90122052937/3aa77ffc-d000-4454-bfaa-bab725793520/Research.md).
+21. [Independent research fact review](https://t90122052937.p.clickup-attachments.com/t90122052937/27d36072-ee9a-49fc-ae4a-915576ec4c44/research%20fact.txt).
+22. [Supplied flow chart](https://t90122052937.p.clickup-attachments.com/t90122052937/80810b89-0dbb-4674-a0db-7eab59173f06/image.png).
+23. [SIH2026-PS171-Honoured Ones presentation](https://t90122052937.p.clickup-attachments.com/t90122052937/cad41c9a-3589-42e6-bea5-39a715e00b04/SIH2026-PS171-Honoured%20Ones.pptx).
+
+---
+
+## 29. Closing architecture statement
+
+ANTARDRISHTI should be implemented as a **local reference monitor for browser agents**, not as a thin redaction wrapper. Perception, privacy classification, disclosure policy, token custody, action authorization, and outcome verification stay local. The server receives only a minimized, independently rechecked view and can propose only typed actions that the browser may still reject.
+
+That design is technically defensible, aligned with SIH26171, small enough to build in phases, and honest about what remains unproven. Most importantly, it gives the team a demo that can survive the question that matters: **"Show us, byte for byte and action by action, why the remote model never needed the user's raw private screen."**

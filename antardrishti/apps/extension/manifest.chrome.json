@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "ANTARDRISHTI",
+  "version": "0.1.0",
+  "description": "Browser-native privacy control plane for hybrid browser agents — SIH26171",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "offscreen"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ANTARDRISHTI — Privacy Control Plane"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

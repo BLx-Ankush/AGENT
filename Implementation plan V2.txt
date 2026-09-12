@@ -1,0 +1,847 @@
+# ANTARDRISHTI Implementation Architecture v2
+
+**Problem statement:** SIH26171, On-device Visual Perception for Light-weight Browser Agents  
+**Organization:** ISRO, Department of Space  
+**Revision:** 2.0  
+**Prepared:** 11 September 2026  
+**Status:** Hackathon-buildable architecture with production-oriented security controls
+
+> ANTARDRISHTI is a browser-native privacy control plane for a hybrid browser agent. The browser performs visual perception, grounding, privacy classification, sanitization, authorization, and execution locally. The remote planner receives only an explicit, verified safe view and returns typed proposals that remain subject to local policy.
+
+This revision supersedes the affected portions of the previous plan. Unchanged security invariants, threat-model controls, browser constraints, and evaluation definitions remain valid unless this document explicitly replaces them.
+
+---
+
+## 1. What changed
+
+Four decisions are now authoritative:
+
+1. **Visual grounding is mandatory.** The MVP must connect visually detected regions to actionable browser targets. A text detector, OCR, face detector, QR detector, and NER pipeline alone is a privacy detector, not a complete visual-perception solution for SIH26171.
+2. **A large local VLM is optional.** Florence-2, FastVLM, or a richer visual reasoner may improve coverage, but the core system must work without them. Mandatory visual grounding is implemented with a compact region-grounding path tied to the unified scene graph.
+3. **Task-aware minimization and placeholders are not novelty claims.** MINIM, Available but Invisible, and MaskClaw establish closely related ideas. ANTARDRISHTI's differentiation is the measured browser-native, cross-engine composition of mandatory visual perception, recipient-aware sanitization, independently verified egress, target-bound capabilities, and safe local execution.
+4. **The server protocol explicitly declares the redaction scheme.** Every protected representation sent to the planner carries safe semantic metadata such as token, category, shape, region, and disclosure reason. Raw values never appear in this metadata.
+5. **The build is split into a narrow Must Ship slice and a broader roadmap.** The hackathon release proves one complete, measurable workflow first. It does not attempt to finish every browser, model, benchmark, detector, dashboard, and workflow at once.
+
+---
+
+## 2. Revised defensible claim
+
+Use this claim in the architecture, deck, README, and demo:
+
+> **ANTARDRISHTI is a browser-native, cross-engine implementation that combines mandatory visual perception and grounding, recipient-aware sanitization, independently verified egress, target-bound local capabilities, and safe execution in one measured end-to-end system.**
+
+Do not claim that task-aware minimization, placeholders, screenshot redaction, browser automation, local inference, or privacy-preserving GUI agents were invented here. Those mechanisms have substantial prior art. The contribution is the disciplined integration and measurement of the complete browser loop.
+
+Do not say:
+
+- "first task-aware privacy minimizer";
+- "first placeholder system";
+- "first visual redactor";
+- "first privacy-preserving GUI agent";
+- "zero leakage";
+- "the planner learns nothing";
+- "a large VLM runs locally by default."
+
+Say instead:
+
+- "raw protected values are withheld from the remote planner";
+- "the planner receives a declared redaction scheme with safe semantics";
+- "visual grounding is mandatory; large visual reasoning is optional";
+- "the end-to-end composition is measured on Chrome and Firefox targets";
+- "privacy and task utility are reported together."
+
+---
+
+## 3. Revised architecture decision
+
+Build a **structured-first, visually grounded, privacy-gated browser agent**.
+
+The hard boundary remains:
+
+> **Raw screenshots and policy-protected values never cross the browser-to-planner boundary. Every server-visible byte is produced by the local sanitizer, validated against a closed schema, independently re-scanned, associated with an explicit redaction declaration, and approved for one exact destination.**
+
+The local pipeline is now:
+
+```text
+User task
+  -> local task sanitizer
+  -> DOM and reconstructed A11y harvest
+  -> visible-tab capture
+  -> changed-tile visual detection
+  -> OCR / face / QR / sensitive-region detection
+  -> mandatory visual grounding
+  -> DOM-visual reconciliation
+  -> recipient-aware policy
+  -> tokenization / masking / omission
+  -> redaction scheme declaration
+  -> independent egress verification
+  -> remote planner
+  -> typed action proposal
+  -> local freshness and safety gate
+  -> target-bound local execution
+  -> outcome re-observation
+```
+
+### 3.1 Mandatory versus optional components
+
+| Component | Status | Why |
+|---|---|---|
+| DOM and reconstructed A11y semantics | **Mandatory** | Low-cost structure and target roles |
+| Visible-tab capture | **Mandatory** | Required for rendered-screen perception |
+| Changed-tile scheduler | **Mandatory** | Controls resource use and latency |
+| Text-region detection | **Mandatory** | Finds rendered text outside reliable DOM mapping |
+| OCR | **Mandatory** | Converts visual text into grounded evidence |
+| Face detection | **Mandatory** | Handles non-text sensitive regions |
+| QR/barcode detection | **Mandatory for high-risk demo** | QR can carry secrets invisible to ordinary OCR |
+| Visual-region grounding | **Mandatory** | Links pixels to scene nodes and actionable targets |
+| DOM-visual reconciliation | **Mandatory** | Prevents structural and painted-state disagreement |
+| Deterministic PII/secret rules | **Mandatory** | Fast and auditable baseline |
+| Compact NER/context classifier | **Mandatory for text semantics** | Detects contextual PII beyond patterns |
+| Recipient-aware policy | **Mandatory** | Planner and task website have different disclosure rights |
+| Explicit redaction declarations | **Mandatory** | Server must understand the redaction scheme |
+| Independent egress verifier | **Mandatory** | Sanitizer cannot be its own only witness |
+| Token vault and target-bound grants | **Mandatory for private form fill** | Utility without planner disclosure |
+| Typed action gate | **Mandatory** | Planner proposes, local policy authorizes |
+| Florence-2 / FastVLM / large local VLM | **Optional** | Richer reasoning, higher resource risk |
+| WebMCP | **Optional** | Early and cross-engine incomplete |
+| Broad multilingual model coverage | **Roadmap** | Not required for the first complete workflow |
+| Three full workflows | **Roadmap** | One complete workflow beats three partial ones |
+
+**Important:** optional does not mean "ignored." Optional components have adapter interfaces and evaluation slots, but they cannot be required for the Must Ship acceptance gate.
+
+---
+
+## 4. Mandatory visual grounding architecture
+
+### 4.1 What visual grounding must prove
+
+The system must demonstrate all four links:
+
+1. **Presence:** a visual object or region exists in the rendered viewport.
+2. **Meaning:** the local pipeline assigns a safe semantic category or role.
+3. **Location:** the region is represented in viewport coordinates and mapped to a scene-graph node.
+4. **Actionability:** the local executor can resolve that node to a current browser target or deliberately marks it non-actionable.
+
+A detector that only says "there is text" does not satisfy this requirement. OCR that returns a string without a stable box does not satisfy it. A DOM button that has no visual confirmation does not satisfy it for visually ambiguous cases.
+
+### 4.2 Grounding pipeline
+
+```mermaid
+flowchart LR
+ C[Visible capture] --> T[Native-resolution tiles]
+ T --> D[Text / face / QR / object proposals]
+ D --> O[OCR and local classifiers]
+ O --> G[Visual grounding]
+ DOM[DOM + reconstructed A11y] --> R[Reconciliation]
+ G --> R
+ R --> SG[Unified scene graph]
+ SG --> A[Actionable target candidates]
+ SG --> P[Privacy policy and redaction]
+```
+
+### 4.3 Grounding output
+
+Every grounded region must produce a record similar to:
+
+```ts
+interface VisualGrounding {
+  visualRegionId: string;
+  observationId: string;
+  frameId: number;
+  documentGeneration: string;
+  bbox: { x: number; y: number; width: number; height: number };
+  class: 'text' | 'face' | 'qr' | 'document' | 'signature' | 'control' | 'image' | 'unknown';
+  semanticLabel: string;
+  confidence: number;
+  evidence: Array<'detector' | 'ocr' | 'dom' | 'hit-test' | 'layout'>;
+  candidateTargetId?: string;
+  targetRelation: 'exact' | 'contains' | 'nearby' | 'visual-only' | 'unresolved';
+  actionability: 'clickable' | 'typable' | 'selectable' | 'readable' | 'non-actionable' | 'unknown';
+  conflictFlags: string[];
+}
+```
+
+### 4.4 Grounding rules
+
+- A visual region is mapped to a DOM node only if its box overlaps the node within a calibrated threshold and the node is visible.
+- Text agreement requires OCR text and DOM/name text to match after documented normalization, or the record is marked contradictory.
+- A visual control without a DOM target is represented as `visual-only` and is not auto-executed until a local hit-test or user handoff establishes a safe target.
+- A DOM target without corresponding painted evidence is allowed for non-visual semantics only; it is not treated as proof that a visible control exists.
+- Overlays, pseudo-elements, canvas, background images, transformed children, and cross-origin frames create explicit risk flags.
+- Any contradiction involving a high-risk action blocks automatic execution and may block planner egress for that region.
+
+### 4.5 Mandatory visual-grounding demo
+
+The Must Ship demo must include a page where the DOM alone is insufficient, for example:
+
+- a canvas-rendered **Pay now** control;
+- a visual account number burned into an image;
+- a face avatar and a nearby DOM button;
+- an image/PDF panel where OCR boxes map to a surrounding form or action region.
+
+The evidence panel must show:
+
+```text
+visual region -> semantic label -> scene node -> actionability -> local policy decision
+```
+
+### 4.6 Optional large visual reasoning
+
+Florence-2, FastVLM, or another VLM may be invoked only when:
+
+- the mandatory grounding path produces an unresolved, task-necessary region;
+- the region is already locally masked or the model runs entirely locally;
+- the backend passes the declared resource and latency budget;
+- the feature flag identifies whether the result came from the optional model.
+
+The default release path must not depend on a large local VLM, and the evaluation report must clearly separate grounding performance from optional VLM performance.
+
+---
+
+## 5. Revised novelty and prior-art position
+
+### 5.1 Prior art acknowledged
+
+The plan explicitly acknowledges the following lineage:
+
+| Prior work | Established idea | Consequence for ANTARDRISHTI |
+|---|---|---|
+| MINIM | Task-conditioned minimal disclosure | Task necessity is not novel |
+| Available but Invisible | Deterministic placeholders and local interaction mediation | Placeholder utility loop is not novel |
+| MaskClaw | Edge-side privacy arbitration before disclosure | Local policy arbitration is not novel |
+| GUIGuard | Privacy recognition, protection, and execution framework | The overall privacy-preserving GUI-agent shape is not novel |
+| WebPII/WebRedact | Visual PII benchmark and screenshot redaction | Visual PII detection/redaction is not novel |
+| Safe-Screen and related systems | Local placeholder substitution and browser loop | Do not claim first closed placeholder loop |
+
+### 5.2 What remains defensible
+
+The defensible engineering contribution is the combination of:
+
+1. **mandatory visual grounding tied to browser action targets;**
+2. **recipient-aware redaction where planner rights differ from destination rights;**
+3. **an explicit server-visible redaction scheme;**
+4. **independent verification of both structured and visual channels;**
+5. **target-bound, freshness-bound local capability redemption;**
+6. **Chrome/Firefox host adapters with measured backend modes;**
+7. **one reproducible end-to-end evaluation protocol.**
+
+This is a composition claim, not a claim that each mechanism is individually new.
+
+### 5.3 Replacement novelty statement
+
+Replace the old novelty wording with:
+
+> **Our contribution is a measured browser-native composition: local visual perception and grounding, recipient-aware sanitization with an explicit redaction scheme, independently verified egress, target-bound local capabilities, and safe execution across Chrome and Firefox adapters.**
+
+---
+
+## 6. Explicit redaction scheme in the server protocol
+
+The server must understand what has been hidden without receiving what was hidden. The protocol therefore includes a `redactions` array in every planner request.
+
+### 6.1 Request schema v2
+
+```json
+{
+  "protocolVersion": "2.0",
+  "session": {
+    "id": "opaque-session-id",
+    "step": 3,
+    "observationId": "obs-7f2a",
+    "origin": "https://checkout.example",
+    "documentGeneration": "doc-9c1e",
+    "viewport": { "width": 1440, "height": 900, "devicePixelRatio": 1 }
+  },
+  "task": {
+    "sanitized": "Complete the checkout using the protected contact field",
+    "risk": "high"
+  },
+  "scene": {
+    "nodes": [
+      {
+        "id": "node-42",
+        "role": "textbox",
+        "name": "Contact email",
+        "value": "<SENSITIVE_K7P4>",
+        "bbox": { "x": 388, "y": 244, "width": 310, "height": 42 },
+        "actionability": "typable"
+      },
+      {
+        "id": "node-63",
+        "role": "button",
+        "name": "Pay now",
+        "bbox": { "x": 388, "y": 608, "width": 180, "height": 48 },
+        "actionability": "clickable"
+      }
+    ]
+  },
+  "redactions": [
+    {
+      "token": "<SENSITIVE_K7P4>",
+      "category": "contact",
+      "shape": "email",
+      "region": "node-42",
+      "visualRegionId": "vr-12",
+      "representation": "placeholder",
+      "disclosure": "shape-only",
+      "reason": "required for target-bound form planning"
+    }
+  ],
+  "protectedVisualRegions": [
+    {
+      "visualRegionId": "vr-15",
+      "category": "biometric",
+      "representation": "masked",
+      "bbox": { "x": 92, "y": 120, "width": 64, "height": 64 }
+    }
+  ],
+  "coverage": {
+    "visualGrounding": "complete-for-task-regions",
+    "unresolvedRegions": 0,
+    "structuredGate": "pending",
+    "visualGate": "pending"
+  },
+  "allowedActions": [
+    "click",
+    "type_token",
+    "scroll",
+    "request_observation",
+    "finish"
+  ]
+}
+```
+
+### 6.2 Redaction scheme rules
+
+Every redaction record must satisfy:
+
+- `token` is opaque or category-generalized and is never the original value;
+- `category` is safe semantic information, such as `contact`, `payment`, `credential`, `biometric`, or `identity-document`;
+- `shape` is a safe format descriptor, such as `email`, `phone`, `numeric-code`, or `unknown`;
+- `region` references a sanitized scene node, not a raw DOM selector;
+- `visualRegionId` is optional for structured-only values and required for visual masks;
+- `representation` is one of `placeholder`, `masked`, `omitted`, or `abstracted`;
+- `disclosure` is one of `shape-only`, `category-only`, `action-required`, or `none`;
+- `reason` is a controlled vocabulary or sanitized short explanation;
+- no raw value, raw OCR transcript, original image, hidden DOM, URL query, or local vault reference is permitted.
+
+### 6.3 Server behavior
+
+The planner uses the redaction scheme to reason safely:
+
+- It can identify that node-42 is an email-like protected textbox.
+- It can propose `type_token` into node-42.
+- It cannot reconstruct the email from the request.
+- It cannot redeem the token.
+- It cannot request a raw value or change the recipient.
+- It must treat `protectedVisualRegions` as unavailable content, not as an instruction to infer the hidden value.
+
+### 6.4 Response protocol
+
+The response must preserve the redaction semantics:
+
+```json
+{
+  "protocolVersion": "2.0",
+  "observationId": "obs-7f2a",
+  "planId": "plan-55bd",
+  "expiresAt": "2026-09-11T17:00:30Z",
+  "actions": [
+    {
+      "id": "a1",
+      "kind": "type_token",
+      "targetNodeId": "node-42",
+      "token": "<SENSITIVE_K7P4>",
+      "expectedRole": "textbox",
+      "expectedRedactionCategory": "contact",
+      "expectedShape": "email",
+      "targetDocumentGeneration": "doc-9c1e",
+      "reason": "fill the protected contact field"
+    }
+  ]
+}
+```
+
+The local action gate verifies that the token, node, category, shape, origin, document generation, and operation all match the local vault record.
+
+---
+
+## 7. Revised Must Ship scope
+
+The previous roadmap is retained as a long-term architecture. The SIH build now has a strict scope cut.
+
+### 7.1 Must Ship: one complete vertical slice
+
+**Target:** Chrome first, Firefox adapter and smoke test second. The complete judged workflow must run reliably in Chrome before cross-browser expansion.
+
+Must Ship components:
+
+1. **One supported demo site** under team control.
+2. **One end-to-end workflow:** fill a protected contact field, inspect a visually rendered sensitive region, and request a user-confirmed submit.
+3. Chrome Manifest V3 extension skeleton.
+4. Firefox adapter with the same protocol and a reduced smoke workflow.
+5. DOM/A11y reconstruction for target discovery.
+6. Visible-tab capture and freshness stamps.
+7. Changed-tile scheduler.
+8. Text-region detector and OCR.
+9. Face detector for the demo fixture.
+10. QR detector only if present in the fixture; otherwise a tested synthetic fixture.
+11. **Mandatory visual grounding** for at least one visual control or visual region.
+12. DOM-visual reconciliation with contradiction flags.
+13. Deterministic PII/secret rules and compact text classifier if it fits the tested budget.
+14. Recipient-aware policy.
+15. Token vault with single-use target-bound grant.
+16. Explicit `redactions` protocol field.
+17. Independent structured-channel verifier.
+18. Independent visual-channel verifier for sanitized crops.
+19. Typed planner response.
+20. Local action safety gate and confirmation.
+21. One-action-then-re-observe loop.
+22. Network recorder and sanitized request proof.
+23. Minimal benchmark runner for the one vertical slice.
+
+### 7.2 Should Ship only if Must Ship is green
+
+- Firefox full workflow;
+- second visual fixture;
+- small-face fallback detector;
+- QR and document detector;
+- optional sanitized-crop planner path;
+- WebGPU optimization;
+- WebMCP feature flag;
+- content-free audit panel.
+
+### 7.3 Cut from the hackathon release
+
+- broad arbitrary-site support;
+- three complete production workflows;
+- learned task-necessity model;
+- full multilingual NER;
+- Florence-2 or FastVLM as a required dependency;
+- local 0.5B VLM hot path;
+- full PDF viewer support;
+- full cross-origin frame automation;
+- policy personalization;
+- polished analytics dashboard;
+- exhaustive benchmark integration;
+- automatic payments, purchases, or autonomous submission.
+
+The removed items remain architecture-compatible roadmap work. They are not silently promised in the first release.
+
+---
+
+## 8. Revised phase plan
+
+### Phase 0: Scope and evidence lock
+
+**Duration:** 2 hours
+
+Freeze:
+
+- one supported site;
+- one workflow;
+- one visual grounding fixture;
+- one planner destination;
+- one Chrome test machine;
+- one Firefox smoke machine;
+- one model/runtime configuration per browser;
+- one set of acceptance metrics.
+
+**Exit gate:** a one-page scope contract exists and no Must Ship item is ambiguous.
+
+### Phase 1: Extension shell and local capture
+
+**Duration:** 4 hours
+
+Build:
+
+- Chrome MV3 service worker and content script;
+- Firefox adapter shell;
+- active-tab user gesture;
+- capture stamp;
+- typed message protocol;
+- local status indicator;
+- no planner network yet.
+
+**Exit gate:** both browsers capture and hash the active viewport without sending it.
+
+### Phase 2: Scene graph and target grounding foundation
+
+**Duration:** 5 hours
+
+Build:
+
+- DOM/A11y reconstruction;
+- stable node IDs;
+- viewport geometry;
+- visual tile IDs;
+- local hit-test helper;
+- visual grounding record type;
+- actionability states.
+
+**Exit gate:** the demo page produces a graph where a visually rendered control maps to a target node or is explicitly unresolved.
+
+### Phase 3: Mandatory visual perception
+
+**Duration:** 8 hours
+
+Build only the detectors required by the fixture:
+
+- text-region detection;
+- OCR;
+- face detection;
+- visual-region grounding;
+- DOM-visual reconciliation;
+- one non-text sensitive-region path.
+
+Do not add five detectors because the architecture lists five. Add only what the judged page proves necessary.
+
+**Exit gate:** DOM-only ablation fails to explain the visual fixture, while the mandatory visual path produces a grounded region with a measurable box and semantic label.
+
+### Phase 4: Privacy and explicit redaction scheme
+
+**Duration:** 5 hours
+
+Build:
+
+- deterministic rules;
+- recipient-aware decisions;
+- token vault;
+- structured value sanitization;
+- visual irreversible masking;
+- `redactions` and `protectedVisualRegions` protocol fields;
+- runtime schema with closed fields.
+
+**Exit gate:** a request containing raw values is rejected; a sanitized request declares what was redacted and why without exposing the original value.
+
+### Phase 5: Independent verifier and sealed egress
+
+**Duration:** 5 hours
+
+Build:
+
+- structured re-scan;
+- image re-decode and OCR where crops exist;
+- canary matching;
+- exact-byte canonical serialization;
+- destination allowlist;
+- runtime request recorder;
+- fail-closed behavior.
+
+**Exit gate:** a deliberately corrupted sanitizer output is blocked; the recorded planner request contains only safe values and explicit redaction metadata.
+
+### Phase 6: Planner and local execution
+
+**Duration:** 6 hours
+
+Build:
+
+- deterministic mock planner first;
+- remote planner adapter second;
+- protocol v2 request/response;
+- typed action validation;
+- freshness binding;
+- target-bound single-use redemption;
+- user confirmation for submit;
+- one-action re-observation.
+
+**Exit gate:** the complete demo runs from task to sanitized request to planner proposal to local tokenized fill to confirmation, with no raw value visible to the planner.
+
+### Phase 7: Evidence, attacks, and presentation
+
+**Duration:** 5 hours
+
+Run:
+
+- raw-value canary test;
+- DOM-only versus grounded comparison;
+- stale plan test;
+- replay test;
+- wrong target test;
+- malicious page-text test;
+- visual redaction recovery attempt;
+- latency and payload-size capture;
+- Chrome clean-profile run;
+- Firefox smoke run.
+
+**Exit gate:** the team can show the request bytes, the redaction scheme, the grounded target, the blocked attack, and the paired privacy/utility result in under three minutes.
+
+---
+
+## 9. Revised 36-hour hackathon plan
+
+| Hours | Focus | Non-negotiable output |
+|---:|---|---|
+| 0-2 | Scope lock | One page, one workflow, one visual fixture, one planner contract |
+| 2-6 | Chrome extension shell | Capture, scene stamp, local overlay, no raw network |
+| 6-11 | Scene graph and grounding | Visual region mapped to actionable or explicitly unresolved node |
+| 11-17 | Mandatory visual path | Text detection, OCR, face/non-text fixture, reconciliation |
+| 17-22 | Privacy protocol | Tokenization, masks, `redactions[]`, protected-region metadata |
+| 22-27 | Verifier and mock planner | Exact-byte gate, canaries, typed mock plan |
+| 27-31 | Local executor | Target-bound token redemption, confirmation, re-observe |
+| 31-34 | Firefox smoke and attacks | Adapter check, stale/replay/prompt-injection tests |
+| 34-36 | Evidence and rehearsal | Recorded request, metrics, fallback video, frozen build |
+
+**Hard cut rule:** if the team falls behind, cut the remote model first and use the deterministic mock planner. Never cut visual grounding, the redaction declaration, the independent verifier, or local action safety. Those are the proof.
+
+---
+
+## 10. Revised immediate sprint: 12 to 16 September 2026
+
+| Date | Priority | Required proof |
+|---|---|---|
+| Sat 12 Sep | Scope, Chrome shell, capture stamps | Raw screenshot exists only locally |
+| Sun 13 Sep | Scene graph plus visual grounding | Visual region maps to action node |
+| Mon 14 Sep | OCR, face/non-text path, reconciliation | DOM-only ablation loses the visual fixture |
+| Tue 15 Sep | Privacy protocol, redactions, verifier | Server sees safe scheme, never raw value |
+| Wed 16 Sep | Planner, local action, attacks, rehearsal | Complete vertical slice and evidence package |
+
+### 10.1 Definition of done for 16 September
+
+The SIH prototype is considered ready when:
+
+- one clean Chrome installation completes the complete workflow;
+- the visual grounding overlay is visible and correct on the judged fixture;
+- the remote request includes `redactions[]` and contains no raw protected value;
+- the planner can return a `type_token` or `click` proposal;
+- the local gate rejects a stale or wrong-target plan;
+- submit requires confirmation;
+- the network recorder proves the exact sanitized bytes;
+- Firefox starts, captures, and runs the shared protocol or clearly reports its unsupported adapter state;
+- the team reports measured latency, payload size, privacy, and utility for the same run;
+- optional VLM features are disabled or clearly labeled as optional.
+
+---
+
+## 11. Revised protocol and module boundaries
+
+### 11.1 Protocol modules
+
+```text
+packages/
+  protocol-v2/
+    observation.ts
+    redaction.ts
+    scene.ts
+    action.ts
+    schemas.ts
+  visual-grounding/
+    proposals.ts
+    ocr-map.ts
+    reconciliation.ts
+    target-map.ts
+  privacy/
+    policy.ts
+    sanitizer.ts
+    token-vault.ts
+  egress/
+    verifier.ts
+    serializer.ts
+    transport.ts
+  executor/
+    action-gate.ts
+    freshness.ts
+    outcome.ts
+```
+
+### 11.2 Import rules
+
+- `visual-grounding` may not import the network client.
+- `privacy` may not import the network client.
+- `protocol-v2` may contain safe metadata types but never raw-vault types.
+- `egress/verifier` must inspect the final protocol object and serialized bytes.
+- `executor` may redeem vault grants but may not call the planner directly.
+- `planner-server` must not know vault implementation or raw-value schemas.
+
+### 11.3 Redaction declaration type
+
+```ts
+interface RedactionDeclaration {
+  token: OpaqueToken;
+  category: 'contact' | 'payment' | 'credential' | 'biometric' | 'identity-document' | 'health' | 'secret' | 'unknown';
+  shape: 'email' | 'phone' | 'card' | 'numeric-code' | 'name' | 'address' | 'image' | 'unknown';
+  region: string;
+  visualRegionId?: string;
+  representation: 'placeholder' | 'masked' | 'omitted' | 'abstracted';
+  disclosure: 'shape-only' | 'category-only' | 'action-required' | 'none';
+  reasonCode: 'required-for-planning' | 'required-for-local-action' | 'not-required' | 'ambiguous';
+}
+```
+
+The schema must reject:
+
+- `value`, `raw`, `original`, `ocrText`, `selector`, `query`, `vaultRef`, or arbitrary extension fields;
+- category names that disclose more than the local policy permits;
+- visual regions without a current observation binding;
+- tokens that do not exist in the local vault;
+- declarations for a recipient not authorized by local policy.
+
+---
+
+## 12. Revised evaluation plan
+
+### 12.1 Visual context accuracy is now a first-class gate
+
+The evaluation must include:
+
+- visual-region detection recall;
+- visual-to-scene-node mapping accuracy;
+- role and actionability accuracy;
+- visual/Dâ€‹OM contradiction rate;
+- grounded target success;
+- DOM-only ablation;
+- full mandatory grounding path;
+- optional VLM path, reported separately.
+
+A visual system that detects PII but cannot identify what the visual object is or how it maps to an action target does not pass the visual-context requirement.
+
+### 12.2 Metrics by SIH weight
+
+| SIH weight | Primary result for Must Ship |
+|---|---|
+| Visual context accuracy, 25% | Grounded-region recall, target mapping accuracy, actionable-node accuracy, DOM-only ablation gap |
+| PII recall and precision, 20% | Entity and region precision/recall for the chosen fixture |
+| Redaction precision, 20% | Protected-region coverage, over-redaction, residual recovery, redaction-scheme correctness |
+| Client resources, 20% | Model bytes, peak memory, CPU, processed pixels, WebGPU/WASM mode |
+| End-to-end latency, 15% | p50/p95 from observation trigger to local action proposal and execution |
+
+### 12.3 Privacy-utility pairs
+
+Always report pairs:
+
+- grounded target accuracy + visual-only privacy recall;
+- protected-pixel coverage + over-redaction;
+- residual leakage + task success;
+- redaction scheme completeness + planner action validity;
+- latency + task completion rate.
+
+Never present zero leakage without utility retention beside it.
+
+### 12.4 Must Ship ablations
+
+Run exactly these four, not eight broad configurations:
+
+1. DOM-only baseline;
+2. DOM plus OCR/PII without visual grounding;
+3. DOM plus mandatory visual grounding and privacy gate;
+4. full Must Ship vertical slice with planner and local execution.
+
+Optional VLM experiments are a separate appendix and cannot be used to hide failure in the mandatory path.
+
+---
+
+## 13. Revised demo script
+
+### Step 1: Show the page
+
+The browser page contains:
+
+- a visually rendered action control;
+- a protected contact field;
+- a face or image region;
+- a prompt-injection-like page message;
+- at least one value that is not reliably recoverable from DOM alone.
+
+### Step 2: Show local perception
+
+Display the local overlay:
+
+```text
+VR-12 | visual text | grounded -> node-42 | email shape | tokenized
+VR-15 | face | visual-only | masked | non-actionable
+VR-21 | button | grounded -> node-63 | clickable | confirmation required
+```
+
+### Step 3: Show the outgoing request
+
+Show the `redactions[]` array and explain:
+
+> The planner knows that node-42 is an email-like protected field. It does not know the email.
+
+### Step 4: Show planner proposal
+
+The planner returns a typed `type_token` or `click` action. It does not return JavaScript, raw selectors, or a request for the secret.
+
+### Step 5: Show local redemption
+
+The local gate validates target, origin, frame, document generation, token category, shape, and one-time nonce. The value is inserted only into the authorized task website.
+
+### Step 6: Show the attack
+
+Change the page or replay the plan. The local gate rejects it as stale, wrong-target, wrong-origin, or already consumed.
+
+### Step 7: Show the metrics
+
+Display:
+
+- visual grounding result;
+- privacy result;
+- redaction result;
+- p50/p95 latency;
+- resource mode;
+- transmitted bytes;
+- utility retention.
+
+---
+
+## 14. Revised go/no-go gates
+
+### Must Ship architecture gate
+
+- [ ] Visual grounding is implemented, not mocked as optional.
+- [ ] At least one visual region maps to a scene node or is explicitly unresolved.
+- [ ] DOM-only ablation is included.
+- [ ] Redaction declarations are present in every planner request.
+- [ ] Redaction declarations contain safe metadata only.
+- [ ] Raw screenshots and raw protected values do not appear in planner bytes.
+- [ ] Independent verification approves the exact serialized payload.
+- [ ] Planner actions are typed and locally validated.
+- [ ] Private values are redeemed only by local, bound grants.
+
+### Must Ship scope gate
+
+- [ ] One complete vertical slice works on a controlled page.
+- [ ] Chrome is clean-profile tested.
+- [ ] Firefox adapter smoke test is complete or its limitation is documented.
+- [ ] Large local VLM is not a dependency for success.
+- [ ] WebMCP is not a dependency for success.
+- [ ] Broad-site support is not promised.
+- [ ] Metrics are collected from the same traces as the demo.
+
+### Stop conditions
+
+Stop adding features when any of these is true:
+
+- the visual grounding fixture is not stable;
+- the request protocol is still changing;
+- the verifier has not blocked a deliberately corrupted payload;
+- the local action gate cannot reject a stale plan;
+- the team cannot explain the redaction declaration in one sentence;
+- adding another model would remove time from end-to-end testing.
+
+---
+
+## 15. Final implementation position
+
+ANTARDRISHTI is not a privacy detector with an agent attached. It is a **locally controlled visual reference monitor** for a browser agent.
+
+The mandatory core is:
+
+```text
+perceive visually
+  -> ground to browser targets
+  -> reconcile with DOM
+  -> classify recipient-specific risk
+  -> declare redactions safely
+  -> verify exact egress
+  -> plan remotely
+  -> authorize locally
+  -> redeem locally
+  -> re-observe
+```
+
+The large VLM, WebMCP, broad-site support, extensive detector catalog, multiple full workflows, and polished dashboard are valuable roadmap items. They are not allowed to obscure the Must Ship proof.
+
+The strongest SIH story is therefore:
+
+> **We do not send a screenshot to an agent and hope privacy survives. We understand the screen locally, ground what matters to actionable browser targets, declare exactly what was redacted, independently verify the outgoing bytes, and let the remote model propose actions that the local browser can still reject.**
