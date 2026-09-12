@@ -1,0 +1,27 @@
+{
+  "name": "@antardrishti/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:chrome": "node build.mjs --target=chrome",
+    "build:firefox": "node build.mjs --target=firefox",
+    "watch": "node build.mjs --target=chrome --watch",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@antardrishti/protocol-v2": "*",
+    "@antardrishti/scene-graph": "*",
+    "@antardrishti/visual-grounding": "*",
+    "@antardrishti/pii-rules": "*",
+    "@antardrishti/privacy": "*",
+    "@antardrishti/egress-verifier": "*",
+    "@antardrishti/planner": "*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.9",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.5.0"
+  }
+}

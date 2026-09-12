@@ -1,0 +1,21 @@
+{
+  "name": "antardrishti",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ANTARDRISHTI — Browser-native privacy control plane for hybrid browser agents (SIH26171)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "build:extension": "npm run build -w apps/extension",
+    "build:chrome": "npm run build:chrome -w apps/extension",
+    "build:firefox": "npm run build:firefox -w apps/extension",
+    "test": "npm test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

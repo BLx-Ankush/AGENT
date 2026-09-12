@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["chrome"]
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/protocol-v2" }
+  ]
+}

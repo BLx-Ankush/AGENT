@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANTARDRISHTI</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1 class="title">ANTARDRISHTI</h1>
+      <p class="subtitle">Privacy Control Plane</p>
+    </header>
+
+    <div class="status-section">
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">Idle</span>
+      </div>
+      <div class="session-info" id="sessionInfo" style="display:none">
+        <span class="session-label">Session:</span>
+        <span class="session-id" id="sessionId">—</span>
+      </div>
+    </div>
+
+    <div class="task-section">
+      <label for="taskInput" class="task-label">Task</label>
+      <textarea id="taskInput" class="task-input" placeholder="Enter your task…" rows="3"></textarea>
+      <button id="submitTask" class="btn btn-primary">Submit Task</button>
+    </div>
+
+    <div class="controls">
+      <button id="startBtn" class="btn btn-secondary">Start</button>
+      <button id="pauseBtn" class="btn btn-secondary" disabled>Pause</button>
+      <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+    </div>
+
+    <!-- ═══ Evidence Panel (V2 §13: 7-step demo) ═══ -->
+    <div class="evidence-panel" id="evidencePanel" style="display:none">
+      <h3 class="evidence-title">📊 Evidence Panel</h3>
+
+      <!-- Step 2: Local perception overlay -->
+      <div class="evidence-section" id="perceptionSection" style="display:none">
+        <div class="evidence-header">🔍 Local Perception</div>
+        <div class="evidence-table" id="perceptionTable"></div>
+      </div>
+
+      <!-- Step 3: Outgoing request with redactions -->
+      <div class="evidence-section" id="redactionSection" style="display:none">
+        <div class="evidence-header">🛡️ Redaction Scheme</div>
+        <div class="evidence-table" id="redactionTable"></div>
+        <div class="evidence-note" id="redactionNote"></div>
+      </div>
+
+      <!-- Step 4: Planner proposal -->
+      <div class="evidence-section" id="plannerSection" style="display:none">
+        <div class="evidence-header">🤖 Planner Proposal</div>
+        <div class="evidence-code" id="plannerActions"></div>
+      </div>
+
+      <!-- Step 5: Local redemption -->
+      <div class="evidence-section" id="redemptionSection" style="display:none">
+        <div class="evidence-header">🔑 Capability Redemption</div>
+        <div class="evidence-table" id="redemptionTable"></div>
+      </div>
+
+      <!-- Step 6: Attack defense -->
+      <div class="evidence-section" id="attackSection" style="display:none">
+        <div class="evidence-header">⚔️ Attack Defense</div>
+        <div class="evidence-table" id="attackTable"></div>
+      </div>
+
+      <!-- Step 7: Metrics -->
+      <div class="evidence-section" id="metricsSection" style="display:none">
+        <div class="evidence-header">📈 Metrics</div>
+        <div class="metrics-grid" id="metricsGrid"></div>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <div class="info-row">
+        <span class="info-label">Phase:</span>
+        <span class="info-value" id="currentPhase">idle</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Observation:</span>
+        <span class="info-value" id="lastObservation">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Redactions:</span>
+        <span class="info-value" id="redactionCount">0</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Actions:</span>
+        <span class="info-value" id="actionCount">0</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pipeline:</span>
+        <span class="info-value" id="pipelineTime">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Network:</span>
+        <span class="info-value network-safe" id="networkStatus">No outbound calls</span>
+      </div>
+    </div>
+
+    <!-- Planner config -->
+    <div class="config-section">
+      <div class="info-row">
+        <span class="info-label">Planner:</span>
+        <select id="plannerMode" class="config-select">
+          <option value="deterministic">Deterministic (Dev)</option>
+          <option value="server">Server LLM</option>
+        </select>
+      </div>
+      <div class="info-row" id="plannerUrlRow" style="display:none">
+        <span class="info-label">URL:</span>
+        <input type="text" id="plannerUrl" class="config-input" value="http://localhost:8000/v1/plan" placeholder="Planner URL">
+      </div>
+      <button id="savePlannerConfig" class="btn btn-small">Save Config</button>
+    </div>
+
+    <footer class="footer">
+      <p class="footer-text">Raw pixels &amp; protected values stay local</p>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
