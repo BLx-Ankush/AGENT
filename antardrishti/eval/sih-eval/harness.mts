@@ -33,10 +33,17 @@ function stripHtml(h: string): string {
           .replace(/\s+/g," ").trim();
 }
 function extractValues(h: string): string {
-  const vals: string[] = [];
+  const parts: string[] = [];
+  // Extract all input/select values as bare strings
   const re = /value="([^"]+)"/g; let m: RegExpExecArray|null;
-  while ((m=re.exec(h))!==null) vals.push(m[1]);
-  return vals.join(" ");
+  while ((m=re.exec(h))!==null) parts.push(m[1]);
+  // Also emit type-tagged strings for password/sensitive inputs so context-anchored detectors fire
+  const pwRe = /<input[^>]*type="password"[^>]*value="([^"]+)"/gi;
+  while ((m=pwRe.exec(h))!==null) parts.push("password: "+m[1]);
+  // Try reverse attribute order too
+  const pwRe2 = /<input[^>]*value="([^"]+)"[^>]*type="password"/gi;
+  while ((m=pwRe2.exec(h))!==null) parts.push("password: "+m[1]);
+  return parts.join(" ");
 }
 const FIXTURE_TEXT = stripHtml(FIXTURE_HTML)+" "+extractValues(FIXTURE_HTML);
 function pct(n: number) { return (n*100).toFixed(1)+"%"; }
@@ -245,13 +252,22 @@ console.log("\n-- S3  Redaction Precision");
   const rLat=Math.round(performance.now()-t0s3);
   // Pixel IoU: compare planned redaction mask vs GT redaction mask
   const gtRects: Array<[number,number,number,number]>=[[50,30,60,60],[160,80,400,80],[160,200,200,40],[160,280,340,40],[160,360,260,40]];
+  // mkMask: handles both raw [x,y,w,h] arrays AND RedactionRegion objects (which have .bbox:[x,y,w,h])
   function mkMask(rs:any[],w:number,h:number): Uint8Array {
     const m=new Uint8Array(w*h);
     for(const r of rs){
       let x0:number,y0:number,rw3:number,rh3:number;
-      if(Array.isArray(r)){[x0,y0,rw3,rh3]=r;}else{x0=r.x;y0=r.y;rw3=r.width;rh3=r.height;}
-      const x2b=x0+rw3,y2b=y0+rh3;
-      for(let y=Math.max(0,y0);y<Math.min(h,y2b);y++) for(let x=Math.max(0,x0);x<Math.min(w,x2b);x++) m[y*w+x]=1;
+      if(Array.isArray(r)){
+        [x0,y0,rw3,rh3]=r;
+      } else if(r.bbox && Array.isArray(r.bbox)){
+        // RedactionRegion: .bbox = [x, y, width, height]
+        [x0,y0,rw3,rh3]=r.bbox;
+      } else {
+        x0=r.x??0; y0=r.y??0; rw3=r.width??0; rh3=r.height??0;
+      }
+      const x2b=Math.round(x0+rw3), y2b=Math.round(y0+rh3);
+      for(let y=Math.max(0,Math.round(y0));y<Math.min(h,y2b);y++)
+        for(let x=Math.max(0,Math.round(x0));x<Math.min(w,x2b);x++) m[y*w+x]=1;
     }
     return m;
   }
