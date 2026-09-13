@@ -235,56 +235,104 @@ class MockPlanner(PlannerAdapter):
 class LLMPlanner(PlannerAdapter):
     """
     Real LLM planner adapter.
-    Connects to a local or remote LLM API (e.g., Ollama, vLLM, OpenAI-compatible).
-    
+    Supports both:
+      - Ollama (local): http://localhost:11434/api/generate
+      - OpenAI-compatible APIs: GPT-4o, Gemini, Claude via proxy, etc.
+
     Contract §17: real server-side LLM for SIH demo.
+
+    Configuration:
+      ANTARDRISHTI_LLM_API_KEY  — API key (OpenAI/Gemini/Anthropic)
+      ANTARDRISHTI_LLM_BASE_URL — Base URL override
+      ANTARDRISHTI_LLM_MODEL    — Model name override
+
+    CLI:
+      --adapter=llm --openai --model=gpt-4o-mini
+      --adapter=llm --model=llama3.2:3b  (local Ollama)
     """
     name = "llm"
-    
-    def __init__(self, model: str = "llama3.1:8b", base_url: str = "http://localhost:11434"):
-        self.model = model
-        self.base_url = base_url
-        self.api_url = f"{base_url}/api/generate"  # Ollama API
-    
+
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        base_url: str = "https://api.openai.com/v1",
+        api_key: str = "",
+        use_openai_format: bool = True,
+    ):
+        self.model = os.environ.get("ANTARDRISHTI_LLM_MODEL", model)
+        self.base_url = os.environ.get("ANTARDRISHTI_LLM_BASE_URL", base_url).rstrip("/")
+        self.api_key = os.environ.get("ANTARDRISHTI_LLM_API_KEY", api_key)
+        self.use_openai_format = use_openai_format
+        # Auto-detect: Ollama uses its own format, others use OpenAI
+        if "11434" in self.base_url or "ollama" in self.base_url.lower():
+            self.use_openai_format = False
+
     async def plan(self, request: PlannerRequest) -> PlannerResponse:
         import httpx
-        
-        # Build prompt from sanitized scene
+
         prompt = self._build_prompt(request)
-        
+        actions: list[AgentAction] = []
+
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.api_url,
-                    json={
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                if self.use_openai_format:
+                    # OpenAI-compatible chat completions format
+                    headers = {"Content-Type": "application/json"}
+                    if self.api_key:
+                        headers["Authorization"] = f"Bearer {self.api_key}"
+
+                    payload = {
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are ANTARDRISHTI, a privacy-preserving browser agent planner. Output ONLY valid JSON. Never guess protected token values.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 512,
+                        "response_format": {"type": "json_object"},
+                    }
+
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    raw_text = resp.json()["choices"][0]["message"]["content"]
+
+                else:
+                    # Ollama native format
+                    payload = {
                         "model": self.model,
                         "prompt": prompt,
                         "stream": False,
                         "format": "json",
-                        "options": {
-                            "temperature": 0.1,
-                            "num_predict": 512,
-                        },
-                    },
-                )
-                response.raise_for_status()
-                
-                result = response.json()
-                raw_text = result.get("response", "{}")
-                
-                # Parse LLM JSON response
+                        "options": {"temperature": 0.1, "num_predict": 512},
+                    }
+                    resp = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    raw_text = resp.json().get("response", "{}")
+
                 plan_data = json.loads(raw_text)
                 actions = self._parse_actions(plan_data, request)
-                
+                print(f"[LLMPlanner] {self.model} returned {len(actions)} actions")
+
         except Exception as e:
             print(f"[LLMPlanner] LLM call failed: {e}")
-            # Fallback to observation request
-            actions = [AgentAction(
-                kind="request_observation",
-                id="action-fallback",
-                reason=f"LLM planning failed: {e}",
-            )]
-        
+            actions = [
+                AgentAction(
+                    kind="request_observation",
+                    id="action-fallback",
+                    reason=f"LLM planning failed: {type(e).__name__}",
+                )
+            ]
+
         return PlannerResponse(
             protocolVersion="2.0",
             observationId=request.session.observationId,
@@ -292,25 +340,34 @@ class LLMPlanner(PlannerAdapter):
             expiresAt=(datetime.utcnow() + timedelta(seconds=30)).isoformat() + "Z",
             actions=actions,
         )
-    
+
     def _build_prompt(self, request: PlannerRequest) -> str:
-        # Build a structured prompt for the LLM
         nodes_desc = []
-        for n in request.scene.nodes[:50]:  # Limit to 50 nodes
+        for n in request.scene.nodes[:50]:
             parts = [f"id={n.id}", f"role={n.role}"]
-            if n.name: parts.append(f"name=\"{n.name}\"")
-            if n.actionability: parts.append(f"action={n.actionability}")
+            if n.name:
+                parts.append(f'name="{n.name}"')
+            if n.actionability:
+                parts.append(f"action={n.actionability}")
+            if n.value:
+                parts.append(f"value={n.value[:30]}")
             nodes_desc.append(" ".join(parts))
-        
-        redactions_desc = []
-        for r in request.redactions:
-            redactions_desc.append(f"  {r.token}: {r.category} ({r.shape})")
-        
-        allowed = ", ".join(request.allowedActions) if request.allowedActions else "click, focus, type_text, type_token, select, scroll, wait, request_observation, finish"
-        
+
+        redactions_desc = [
+            f"  {r.token}: {r.category} ({r.shape})"
+            for r in request.redactions
+        ]
+
+        allowed = (
+            ", ".join(request.allowedActions)
+            if request.allowedActions
+            else "click, focus, type_text, type_token, select, scroll, wait, request_observation, finish"
+        )
+
         return f"""You are a browser agent planner. You receive a sanitized view of a web page.
 Protected values have been replaced with tokens like <SENSITIVE_XXXX>.
 You MUST NOT try to guess or reconstruct protected values.
+For type_token actions, use the exact token string from the REDACTED VALUES list.
 
 TASK: {request.task.sanitized}
 RISK: {request.task.risk}
@@ -324,43 +381,32 @@ REDACTED VALUES:
 
 ALLOWED ACTIONS: {allowed}
 
-For type_token actions, reference the exact token from the REDACTED VALUES list.
-Never use arbitrary selectors, JavaScript, or eval.
-
-Respond with JSON:
-{{"actions": [{{"kind": "...", "id": "action-1", "targetNodeId": "...", "reason": "..."}}]}}
+Return JSON:
+{{"actions": [{{"kind": "click|type_token|type_text|focus|scroll|wait|finish|request_observation",
+               "id": "action-1", "targetNodeId": "<scene-node-id>",
+               "text": "<only for type_text>", "token": "<SENSITIVE_... only for type_token>",
+               "reason": "<brief explanation>"}}]}}
 """
-    
-    def _parse_actions(self, plan_data: dict, request: PlannerRequest) -> list[AgentAction]:
+
+    def _parse_actions(
+        self, plan_data: dict, request: PlannerRequest
+    ) -> list[AgentAction]:
         actions = []
         raw_actions = plan_data.get("actions", [])
-        
-        valid_kinds = {"click", "focus", "type_text", "type_token", "select", "scroll", "wait", "request_observation", "finish"}
+
+        valid_kinds = {
+            "click", "focus", "type_text", "type_token", "select",
+            "scroll", "wait", "request_observation", "finish",
+        }
         node_ids = {n.id for n in request.scene.nodes}
-        
-        for i, raw in enumerate(raw_actions[:5]):  # Max 5 actions
+
+        for i, raw in enumerate(raw_actions[:5]):
             kind = raw.get("kind", "")
             if kind not in valid_kinds:
                 continue
-            
+
             target = raw.get("targetNodeId")
             if target and target not in node_ids:
-                continue  # Skip actions targeting non-existent nodes
-            
-            actions.append(AgentAction(
-                kind=kind,
-                id=raw.get("id", f"action-{i+1}"),
-                targetNodeId=target,
-                text=raw.get("text"),
-                token=raw.get("token"),
-                expectedRole=raw.get("expectedRole"),
-                reason=raw.get("reason", ""),
-            ))
-        
-        if not actions:
-            actions.append(AgentAction(
-                kind="request_observation",
-                id="action-1",
                 reason="No valid actions parsed from LLM response",
             ))
         
@@ -444,27 +490,65 @@ async def plan(request: Request):
 
 current_adapter: PlannerAdapter = MockPlanner()
 
+
 def main():
     parser = argparse.ArgumentParser(description="ANTARDRISHTI Planner Server")
-    parser.add_argument("--adapter", choices=["mock", "llm"], default="mock",
-                        help="Planner adapter (mock=deterministic, llm=real LLM)")
-    parser.add_argument("--model", default="llama3.1:8b",
-                        help="LLM model name (for Ollama)")
-    parser.add_argument("--llm-url", default="http://localhost:11434",
-                        help="LLM API base URL")
+    parser.add_argument(
+        "--adapter",
+        choices=["mock", "llm"],
+        default="mock",
+        help="Planner adapter (mock=deterministic, llm=real LLM)",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("ANTARDRISHTI_LLM_MODEL", "gpt-4o-mini"),
+        help="LLM model name",
+    )
+    parser.add_argument(
+        "--openai",
+        action="store_true",
+        default=True,
+        help="Use OpenAI-compatible API (default: True)",
+    )
+    parser.add_argument(
+        "--ollama",
+        action="store_true",
+        default=False,
+        help="Use local Ollama (overrides --openai)",
+    )
+    parser.add_argument(
+        "--llm-url",
+        default=os.environ.get("ANTARDRISHTI_LLM_BASE_URL", "https://api.openai.com/v1"),
+        help="LLM API base URL",
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Server host")
     parser.add_argument("--port", type=int, default=8000, help="Server port")
     parser.add_argument("--reload", action="store_true", help="Enable hot reload")
     args = parser.parse_args()
-    
+
     global current_adapter
     if args.adapter == "llm":
-        current_adapter = LLMPlanner(model=args.model, base_url=args.llm_url)
-        print(f"[Planner] LLM adapter: {args.model} @ {args.llm_url}")
+        use_openai = not args.ollama
+        if args.ollama:
+            base_url = args.llm_url if "11434" in args.llm_url else "http://localhost:11434"
+        else:
+            base_url = args.llm_url
+
+        api_key = os.environ.get("ANTARDRISHTI_LLM_API_KEY", "")
+        current_adapter = LLMPlanner(
+            model=args.model,
+            base_url=base_url,
+            api_key=api_key,
+            use_openai_format=use_openai,
+        )
+        backend_label = "Ollama" if args.ollama else "OpenAI-compatible"
+        print(f"[Planner] LLM adapter ({backend_label}): {args.model} @ {base_url}")
+        if use_openai and not api_key:
+            print("[Planner] WARNING: ANTARDRISHTI_LLM_API_KEY not set")
     else:
         current_adapter = MockPlanner()
         print("[Planner] Mock (deterministic) adapter")
-    
+
     print(f"[Planner] Starting on http://{args.host}:{args.port}")
     uvicorn.run(
         "server:app",
@@ -472,6 +556,7 @@ def main():
         port=args.port,
         reload=args.reload,
     )
+
 
 if __name__ == "__main__":
     main()

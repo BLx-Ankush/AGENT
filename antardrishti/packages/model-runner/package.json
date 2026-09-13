@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@antardrishti/protocol-v2": "*"
+    "@antardrishti/protocol-v2": "*",
+    "onnxruntime-web": "^1.29.0"
   }
 }

@@ -207,3 +207,86 @@ body {
   align-self: flex-start;
 }
 .btn-small:hover { background: var(--border); }
+
+/* ── Model Status Panel ──────────────────────────────────── */
+
+.model-status-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.model-status-grid { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+
+.model-status-header {
+  font-size: 11px; color: var(--text-secondary);
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px;
+}
+
+.model-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.model-name { flex: 1; color: var(--text-primary); }
+.model-size { color: var(--text-muted); font-size: 10px; min-width: 36px; text-align: right; }
+.model-status { font-size: 10px; min-width: 20px; text-align: center; }
+.model-status.loaded { color: var(--success); }
+.model-status.pending { color: var(--warning); }
+
+/* Runtime badges */
+.badge {
+  padding: 1px 6px; border-radius: 3px; font-size: 9px;
+  font-weight: 700; letter-spacing: 0.5px;
+}
+.badge-gpu { background: rgba(124,77,255,0.25); color: var(--accent); }
+.badge-wasm { background: rgba(83,109,254,0.25); color: #82b1ff; }
+
+/* ── Evidence Panel Enhancements ─────────────────────────── */
+
+.evidence-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; padding: 4px 6px;
+  border-radius: 4px;
+}
+.evidence-row:hover { background: rgba(255,255,255,0.03); }
+
+.col-status.detected { color: #69f0ae; }
+.col-status.biometric { color: var(--danger); }
+.col-status.redacted { color: var(--danger); }
+.col-status.none { color: var(--text-muted); }
+.col-status.tokenized { color: var(--success); }
+.token-id { font-family: monospace; color: #82b1ff; font-size: 10px; }
+
+.ocr-sample { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Action display */
+.action-row {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 11px; padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.action-num { color: var(--text-muted); min-width: 14px; }
+.action-kind {
+  padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700;
+  min-width: 70px; text-align: center;
+}
+.action-kind.click { background: rgba(0,230,118,0.2); color: #00e676; }
+.action-kind.type_token { background: rgba(124,77,255,0.2); color: #b388ff; }
+.action-kind.type_text { background: rgba(83,109,254,0.2); color: #82b1ff; }
+.action-kind.focus { background: rgba(255,193,7,0.2); color: #ffd54f; }
+.action-kind.scroll { background: rgba(38,198,218,0.2); color: #4dd0e1; }
+.action-kind.request_observation { background: rgba(255,82,82,0.2); color: #ff8a80; }
+.action-target { color: var(--text-muted); font-family: monospace; font-size: 9px; }
+.action-reason { color: var(--text-secondary); flex: 1; font-size: 10px; }
+
+/* Metric card secure */
+.metric-card.secure .metric-value { color: var(--success); }
+.metric-backend { font-size: 11px !important; }
+
+/* Network status */
+.network-status { font-size: 11px; }
+.network-used { color: var(--warning); }
+

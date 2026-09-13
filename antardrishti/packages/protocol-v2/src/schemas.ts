@@ -170,7 +170,13 @@ export function scanForForbiddenFields(
   for (const [key, val] of Object.entries(obj)) {
     const currentPath = path ? `${path}.${key}` : key;
     if ((FORBIDDEN_FIELDS as readonly string[]).includes(key)) {
-      violations.push(currentPath);
+      // Allow tokenized values: <SENSITIVE_XXXX> are opaque vault references.
+      // Only flag if the value is a non-empty string that is NOT a token.
+      const isTokenized = typeof val === 'string' && val.startsWith('<SENSITIVE_');
+      const isEmptyOrNull = val === null || val === undefined || val === '';
+      if (!isTokenized && !isEmptyOrNull) {
+        violations.push(currentPath);
+      }
     }
     if (typeof val === 'object' && val !== null) {
       violations.push(...scanForForbiddenFields(val, currentPath));

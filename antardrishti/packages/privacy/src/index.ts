@@ -7,3 +7,4 @@
 export * from './token-vault';
 export * from './policy';
 export * from './sanitizer';
+export * from './visual-redactor';

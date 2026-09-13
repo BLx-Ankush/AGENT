@@ -1,0 +1,82 @@
+﻿{
+    "models":  [
+                   {
+                       "id":  "text-detector-v1",
+                       "category":  "text-detector",
+                       "filename":  "text-detector.onnx",
+                       "description":  "PP-OCRv4 DBNet text detector (Chinese/English)",
+                       "license":  "Apache-2.0",
+                       "source":  "PaddlePaddle / webnn/PP-OCRv4-ONNX (HuggingFace)",
+                       "sha256":  "30a86f5731181461d08021402766601e4302a9b9b9666be8aff402696339cdff",
+                       "sizeBytes":  4745517,
+                       "inputShape":  [
+                                          1,
+                                          3,
+                                          640,
+                                          640
+                                      ],
+                       "outputNames":  [
+                                           "sigmoid_0.tmp_0"
+                                       ]
+                   },
+                   {
+                       "id":  "ocr-recognizer-v1",
+                       "category":  "ocr-recognizer",
+                       "filename":  "ocr-recognizer.onnx",
+                       "description":  "PP-OCRv4 text recognizer (Chinese/English)",
+                       "license":  "Apache-2.0",
+                       "source":  "PaddlePaddle / webnn/PP-OCRv4-ONNX (HuggingFace)",
+                       "sha256":  "06b3e6af6c59a1ba5d53790ed8c2e4b2de389870b6cf5a97f349f3412cb269c0",
+                       "sizeBytes":  10822323,
+                       "inputShape":  [
+                                          1,
+                                          3,
+                                          48,
+                                          -1
+                                      ],
+                       "outputNames":  [
+                                           "softmax_11.tmp_0"
+                                       ]
+                   },
+                   {
+                       "id":  "face-detector-v1",
+                       "category":  "face-detector",
+                       "filename":  "face-detector.onnx",
+                       "description":  "BlazeFace Short Range face detector",
+                       "license":  "Apache-2.0",
+                       "source":  "Google MediaPipe / garavv/blazeface-onnx (HuggingFace)",
+                       "sha256":  "564740c5146673c840257402cee8309161848e48e64d277a862ab4d501adf8a5",
+                       "sizeBytes":  535842,
+                       "inputShape":  [
+                                          1,
+                                          3,
+                                          128,
+                                          128
+                                      ],
+                       "outputNames":  [
+                                           "classificators",
+                                           "regressors"
+                                       ]
+                   },
+                   {
+                       "id":  "ui-region-detector-v1",
+                       "category":  "region-parser",
+                       "filename":  "ui-region-detector.onnx",
+                       "description":  "OmniParser icon-detect UI element detector (fp32)",
+                       "license":  "MIT",
+                       "source":  "Microsoft OmniParser / onnx-community/OmniParser-icon_detect (HuggingFace)",
+                       "sha256":  "199626646b896fc40be49f30185f8c03a7ad066c24cb9ab73c17d0c6f3521f2c",
+                       "sizeBytes":  12136163,
+                       "inputShape":  [
+                                          1,
+                                          3,
+                                          640,
+                                          640
+                                      ],
+                       "outputNames":  [
+                                           "output0"
+                                       ]
+                   }
+               ],
+    "generatedAt":  "2026-09-13T10:11:43.5643586+05:30"
+}
