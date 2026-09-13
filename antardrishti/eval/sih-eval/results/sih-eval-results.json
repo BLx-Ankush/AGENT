@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-09-13T07:05:02.329Z",
+    "timestamp": "2026-09-13T08:06:10.204Z",
     "fixture": "apps/demo-page/index.html",
     "backend": "onnxruntime-node/cpu",
     "nodeVersion": "v24.11.0",
@@ -9,12 +9,12 @@
     "chromeWebGPU": "NOT_RUN -- requires live Chrome extension. Expected 3-8x faster [EXTERNAL: ONNX Runtime WebGPU benchmarks]."
   },
   "piiEval": {
-    "TP": 8,
-    "FP": 3,
-    "FN": 4,
-    "precision": 0.7272727272727273,
-    "recall": 0.6666666666666666,
-    "f1": 0.6956521739130435,
+    "TP": 12,
+    "FP": 2,
+    "FN": 0,
+    "precision": 0.8571428571428571,
+    "recall": 1,
+    "f1": 0.923076923076923,
     "byCategory": {
       "email": {
         "tp": 1,
@@ -23,7 +23,7 @@
       },
       "phone": {
         "tp": 1,
-        "fp": 3,
+        "fp": 2,
         "fn": 0
       },
       "pan": {
@@ -42,9 +42,9 @@
         "fn": 0
       },
       "password": {
-        "tp": 0,
+        "tp": 1,
         "fp": 0,
-        "fn": 1
+        "fn": 0
       },
       "jwt": {
         "tp": 1,
@@ -57,9 +57,9 @@
         "fn": 0
       },
       "otp": {
-        "tp": 0,
+        "tp": 1,
         "fp": 0,
-        "fn": 1
+        "fn": 0
       },
       "ifsc": {
         "tp": 1,
@@ -67,18 +67,18 @@
         "fn": 0
       },
       "address": {
-        "tp": 0,
+        "tp": 1,
         "fp": 0,
-        "fn": 1
+        "fn": 0
       },
       "account-number": {
-        "tp": 0,
+        "tp": 1,
         "fp": 0,
-        "fn": 1
+        "fn": 0
       }
     },
     "gtCount": 12,
-    "detectedCount": 11,
+    "detectedCount": 14,
     "visualOnlyGt": 1,
     "note": "GT-PII-09 (canvas account number) requires OCR -- excluded from DOM precision/recall"
   },
@@ -86,12 +86,12 @@
     "textDetector": {
       "pixelsAbove03": 3220,
       "textRatio": "0.0079",
-      "latencyMs": 170
+      "latencyMs": 167
     },
     "regionParser": {
       "uiDetections": 24,
       "maxConf": "0.878",
-      "latencyMs": 78
+      "latencyMs": 87
     },
     "faceDetector": {
       "N": 0,
@@ -101,7 +101,7 @@
         16
       ],
       "box": null,
-      "latencyMs": 3
+      "latencyMs": 6
     },
     "gtRegions": 8,
     "detectedRegions": 6,
@@ -110,14 +110,14 @@
     "note": "Pixel IoU uses 30% GT text coverage estimate from fixture layout analysis. Precision=1.0 assumed (all detections in-scope)."
   },
   "redactionEval": {
-    "piou": "0.0000",
+    "piou": "1.0000",
     "overRedaction": "0.0000",
-    "underRedaction": "0.1252",
+    "underRedaction": "0.0000",
     "utilityRetention": "1.0000",
     "adversarialLeakPixels": 0,
     "plannedRegions": 5,
     "gtRegions": 5,
-    "latencyMs": 3
+    "latencyMs": 6
   },
   "latencyEval": {
     "configs": [
@@ -131,19 +131,19 @@
             "meanMs": "0.00"
           },
           "harvest": {
-            "p50ms": "0.16",
-            "p95ms": "0.38",
-            "meanMs": "0.20"
+            "p50ms": "0.21",
+            "p95ms": "0.60",
+            "meanMs": "0.26"
           },
           "forbidden": {
             "p50ms": "0.01",
             "p95ms": "0.02",
-            "meanMs": "0.01"
+            "meanMs": "0.04"
           },
           "total": {
-            "p50ms": "0.18",
-            "p95ms": "0.43",
-            "meanMs": "0.21"
+            "p50ms": "0.22",
+            "p95ms": "1.13",
+            "meanMs": "0.30"
           }
         }
       },
@@ -163,10 +163,10 @@
   },
   "resourceEval": {
     "loadTimes": {
-      "text-detector": 154,
-      "ocr-recognizer": 212,
+      "text-detector": 155,
+      "ocr-recognizer": 226,
       "face-detector": 31,
-      "ui-region-detector": 121
+      "ui-region-detector": 131
     },
     "modelSizesMB": {
       "text-detector": "4.75",
@@ -175,10 +175,10 @@
       "ui-region-detector": "12.14"
     },
     "totalModelSizeMB": "28.24",
-    "heapBeforeMB": "11.6",
-    "heapAfterMB": "11.7",
+    "heapBeforeMB": "13.8",
+    "heapAfterMB": "13.9",
     "heapDeltaMB": "0.1",
-    "rssMB": "204.5",
+    "rssMB": "212.7",
     "gpu": "N/A -- CPU backend",
     "inferenceCountPerRun": 4,
     "estimatedCaptureBytes": {
@@ -188,13 +188,13 @@
     }
   },
   "payloadEval": {
-    "payloadSizeChars": 978,
+    "payloadSizeChars": 1197,
     "egressVerdict": "APPROVED",
     "leaks": [],
     "leakCount": 0,
-    "opaqueTokens": 11,
+    "opaqueTokens": 14,
     "pass": true,
-    "piiDetected": 11,
+    "piiDetected": 14,
     "vaultTokensStored": 0,
     "probeResults": [
       {

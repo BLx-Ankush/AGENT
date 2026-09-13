@@ -64,11 +64,14 @@ export function scanForPii(text: string): PiiDetection[] {
   // This ensures overlapping digit sequences are classified correctly
   detections.push(...detectEmails(text));
   detections.push(...detectCreditCards(text));
+  detections.push(...detectAccountNumbers(text)); // after CC so Luhn-valid 16-digit cards win
   detections.push(...detectAadhaar(text));
   detections.push(...detectPAN(text));
   detections.push(...detectIFSC(text));
   detections.push(...detectIBAN(text));
   detections.push(...detectOTP(text));
+  detections.push(...detectPasswords(text));
+  detections.push(...detectAddresses(text));
   detections.push(...detectJWT(text));
   detections.push(...detectPrivateKeys(text));
   detections.push(...detectApiKeys(text));
@@ -234,22 +237,127 @@ function detectIBAN(text: string): PiiDetection[] {
 }
 
 function detectOTP(text: string): PiiDetection[] {
-  // OTP is context-dependent: 4–8 digit code near keywords
-  const pattern = /\b(?:otp|code|verify|verification|one.?time)\b[^a-z]*\b(\d{4,8})\b/gi;
+  // OTP is context-dependent: 4–8 digit code near OTP keywords.
+  // Pattern 1: keyword then digits (e.g. "OTP: 123456", "code is: 847291")
+  // Pattern 2: standalone 6-digit block after "is:" (verification code form)
+  const patterns = [
+    /\b(?:otp|one.?time.?(?:pass(?:word|code)?|code|pin))\s*[:\-]?\s*(\d{4,8})\b/gi,
+    /\b(?:verification|verify|auth(?:entication)?)\s+(?:code|pin|otp)\s+(?:is\s*[:\-]?\s*)?(\d{4,8})\b/gi,
+    /\bcode\s+is\s*[:\-]?\s*(\d{4,8})\b/gi,
+  ];
+  const results: PiiDetection[] = [];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const digit = match[1];
+      const digitIdx = match.index + match[0].lastIndexOf(digit);
+      results.push({
+        category: 'otp',
+        validationTier: 'context-inferred',
+        confidence: 0.82,
+        matchedText: digit,
+        startOffset: digitIdx,
+        endOffset: digitIdx + digit.length,
+        rule: 'otp-context',
+      });
+    }
+  }
+  return dedup(results);
+}
+
+/**
+ * Detect high-entropy password-like strings.
+ * Matches strings that meet all four complexity criteria:
+ * uppercase, lowercase, digit, and special character — min 8 chars.
+ * Only fires when near a password-related label/field context.
+ */
+function detectPasswords(text: string): PiiDetection[] {
+  // Context-anchored: look for the value AFTER password-related keywords
+  const contextPattern =
+    /\b(?:password|passwd|pwd|pass)\b[^\S\r\n]*(?:[=:\-]\s*|\s+)([^\s]{8,64})/gi;
   const results: PiiDetection[] = [];
   let match;
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = contextPattern.exec(text)) !== null) {
+    const candidate = match[1].replace(/['";,]+$/, ''); // strip trailing punctuation
+    // Require at least three of four complexity criteria
+    const hasUpper = /[A-Z]/.test(candidate);
+    const hasLower = /[a-z]/.test(candidate);
+    const hasDigit = /\d/.test(candidate);
+    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{}|;:<>?,./]/.test(candidate);
+    const complexity = [hasUpper, hasLower, hasDigit, hasSpecial].filter(Boolean).length;
+    if (complexity >= 3) {
+      const idx = match.index + match[0].indexOf(candidate);
+      results.push({
+        category: 'password',
+        validationTier: 'context-inferred',
+        confidence: 0.75,
+        matchedText: candidate,
+        startOffset: idx,
+        endOffset: idx + candidate.length,
+        rule: 'password-context-complexity',
+      });
+    }
+  }
+  return dedup(results);
+}
+
+/**
+ * Detect Indian postal addresses: street number + road + city + state + 6-digit PIN.
+ * Example: "42 MG Road, Bengaluru, Karnataka 560001"
+ */
+function detectAddresses(text: string): PiiDetection[] {
+  const patterns = [
+    // "<num> <road/locality>, <city>, <state> <pincode>"
+    /\b\d{1,4}\s+[A-Za-z][A-Za-z\s.-]{3,40},\s*[A-Za-z][A-Za-z\s]{2,25},\s*[A-Za-z][A-Za-z\s]{2,25}\s+\d{6}\b/g,
+    // "<road>, <city> - <pincode>" (alternate dash form)
+    /\b[A-Za-z][A-Za-z\s.-]{3,40},\s*[A-Za-z][A-Za-z\s]{2,25}\s*[-–]\s*\d{6}\b/g,
+  ];
+  const results: PiiDetection[] = [];
+  for (const p of patterns) {
+    results.push(...matchAll(text, p, 'address', 'context-inferred', 0.72, 'indian-address-pattern'));
+  }
+  return dedup(results);
+}
+
+/**
+ * Detect standalone account numbers (16-digit numeric strings that are NOT
+ * valid credit/debit card numbers per Luhn algorithm).
+ * Also detects shorter account numbers (9–18 digits) in beneficiary context.
+ */
+function detectAccountNumbers(text: string): PiiDetection[] {
+  const results: PiiDetection[] = [];
+  // 16-digit: only if Luhn FAILS (Luhn-valid ones are caught by detectCreditCards)
+  // Confidence 0.92 > phone 0.85 so this wins deduplication for 16-digit numbers
+  const pattern16 = /\b(\d{16})\b/g;
+  let match;
+  while ((match = pattern16.exec(text)) !== null) {
+    if (!luhnCheck(match[1])) {
+      results.push({
+        category: 'account-number',
+        validationTier: 'pattern-matched',
+        confidence: 0.92,
+        matchedText: match[1],
+        startOffset: match.index,
+        endOffset: match.index + match[1].length,
+        rule: 'account-number-16digit-non-luhn',
+      });
+    }
+  }
+  // Contextual: 9–18 digit numbers near account/beneficiary keywords
+  const ctxPattern =
+    /\b(?:account|acc|a\/c|beneficiary|acct)\b[^\S\r\n]*(?:no\.?|num(?:ber)?)?[^\S\r\n]*[:\-]?[^\S\r\n]*(\d{9,18})\b/gi;
+  while ((match = ctxPattern.exec(text)) !== null) {
     results.push({
-      category: 'otp',
+      category: 'account-number',
       validationTier: 'context-inferred',
-      confidence: 0.8,
+      confidence: 0.80,
       matchedText: match[1],
       startOffset: match.index + match[0].indexOf(match[1]),
       endOffset: match.index + match[0].indexOf(match[1]) + match[1].length,
-      rule: 'otp-context',
+      rule: 'account-number-context',
     });
   }
-  return results;
+  return dedup(results);
 }
 
 function detectJWT(text: string): PiiDetection[] {
