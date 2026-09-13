@@ -90,7 +90,14 @@ async function build() {
     copyFileSync(cssPath, join(distDir, 'popup.css'));
   }
 
+  // 5b. Copy ORT smoke test page (dev/validation tool)
+  const smokeTestSrc = join(__dirname, 'ort-smoke-test.html');
+  if (existsSync(smokeTestSrc)) {
+    copyFileSync(smokeTestSrc, join(distDir, 'ort-smoke-test.html'));
+  }
+
   // 6. Copy ONNX model assets → dist/{target}/models/
+
   // Models are accessed by the service worker at chrome-extension://<id>/models/*.onnx
   const modelsSrc = join(__dirname, 'assets/models');
   const modelsDst = join(distDir, 'models');
@@ -100,6 +107,24 @@ async function build() {
       copyFileSync(join(modelsSrc, f), join(modelsDst, f));
     }
     console.log(`  → Copied models: ${readdirSync(modelsSrc).join(', ')}`);
+  }
+
+  // 7. Copy ONNX Runtime Web WASM assets → dist/{target}/ort/
+  // These files are loaded at runtime by ORT via chrome.runtime.getURL('ort/...')
+  // NO CDN, NO external fetch — all WASM binaries are extension-local.
+  //
+  // Files required:
+  //   ort-wasm-simd-threaded.wasm      → WASM backend (numThreads=1, SIMD)
+  //   ort-wasm-simd-threaded.jsep.wasm → WebGPU/JSEP backend (navigator.gpu)
+  const ortSrc = join(__dirname, 'assets/ort');
+  const ortDst = join(distDir, 'ort');
+  if (existsSync(ortSrc)) {
+    mkdirSync(ortDst, { recursive: true });
+    const ortFiles = readdirSync(ortSrc);
+    for (const f of ortFiles) {
+      copyFileSync(join(ortSrc, f), join(ortDst, f));
+    }
+    console.log(`  → Copied ORT runtime: ${ortFiles.join(', ')}`);
   }
 
   const elapsed = Date.now() - startTime;

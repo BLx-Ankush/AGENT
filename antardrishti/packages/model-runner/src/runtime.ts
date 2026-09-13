@@ -35,6 +35,11 @@ export async function detectRuntime(): Promise<RuntimeCapabilities> {
     devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
   };
 
+  // Required startup log sequence (Phase 9 §7)
+  console.log(`[ModelRuntime] browser=${browser}`);
+  console.log(`[ModelRuntime] webgpu=${webgpuAvailable}`);
+  console.log(`[ModelRuntime] wasm=${wasmAvailable}`);
+  console.log(`[ModelRuntime] selectedBackend=${selectedBackend}`);
   console.log('[ModelRunner] Runtime capabilities:', result);
   return result;
 }
