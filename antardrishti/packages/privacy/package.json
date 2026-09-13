@@ -9,6 +9,7 @@
   "dependencies": {
     "@antardrishti/protocol-v2": "*",
     "@antardrishti/scene-graph": "*",
-    "@antardrishti/pii-rules": "*"
+    "@antardrishti/pii-rules": "*",
+    "@antardrishti/semantic-sensitivity": "*"
   }
 }

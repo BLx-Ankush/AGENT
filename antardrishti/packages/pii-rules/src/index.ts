@@ -427,27 +427,36 @@ function dedup(detections: PiiDetection[]): PiiDetection[] {
 }
 
 /**
- * Deduplicate overlapping detections.
- * When two detections overlap, keep the one with higher confidence.
- * Earlier detections (more specific categories) win ties.
+ * Deduplicate overlapping detections using span-overlap logic.
+ *
+ * When two detections share ANY character position, keep the one with
+ * higher confidence. Span-overlap (not midpoint containment) correctly
+ * removes phone FPs that partially overlap Aadhaar/account-number spans.
+ *
+ * Sort: confidence DESC → startOffset ASC (earlier wins ties).
  */
 function deduplicateOverlapping(detections: PiiDetection[]): PiiDetection[] {
   if (detections.length <= 1) return detections;
 
-  // Sort by confidence descending (highest wins), then by specificity
-  const sorted = [...detections].sort((a, b) => b.confidence - a.confidence);
+  // Highest confidence first; break ties by earlier position
+  const sorted = [...detections].sort((a, b) => {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return a.startOffset - b.startOffset;
+  });
 
   const result: PiiDetection[] = [];
+  // Track every character offset already claimed by an accepted detection
   const covered = new Set<number>();
 
   for (const det of sorted) {
-    // Check if this detection's midpoint is already covered
-    const midpoint = Math.floor((det.startOffset + det.endOffset) / 2);
-    if (covered.has(midpoint)) continue;
+    // Discard if ANY position in this span is already covered
+    let overlaps = false;
+    for (let i = det.startOffset; i < det.endOffset; i++) {
+      if (covered.has(i)) { overlaps = true; break; }
+    }
+    if (overlaps) continue;
 
     result.push(det);
-
-    // Mark range as covered
     for (let i = det.startOffset; i < det.endOffset; i++) {
       covered.add(i);
     }
