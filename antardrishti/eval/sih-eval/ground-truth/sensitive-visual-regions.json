@@ -1,0 +1,18 @@
+{
+  "_comment": "Ground-truth sensitive visual regions that MUST be redacted before any network egress.",
+  "_fixture": "apps/demo-page/index.html",
+  "_version": "1.0",
+  "regions": [
+    { "id": "GT-REDACT-01", "element": "#face-avatar",     "reason": "biometric",       "priority": "critical" },
+    { "id": "GT-REDACT-02", "element": "#account-canvas",  "reason": "financial-visual", "priority": "critical" },
+    { "id": "GT-REDACT-03", "element": "#pan",             "reason": "identity-pii",     "priority": "critical" },
+    { "id": "GT-REDACT-04", "element": "#aadhaar",         "reason": "identity-pii",     "priority": "critical" },
+    { "id": "GT-REDACT-05", "element": "#card-number",     "reason": "financial-pii",    "priority": "critical" },
+    { "id": "GT-REDACT-06", "element": "#password",        "reason": "credential",       "priority": "critical" },
+    { "id": "GT-REDACT-07", "element": "#card-cvv",        "reason": "credential",       "priority": "critical" },
+    { "id": "GT-REDACT-08", "element": "#api-key",         "reason": "secret",           "priority": "high"     }
+  ],
+  "totalCount": 8,
+  "critical": 7,
+  "high": 1
+}
