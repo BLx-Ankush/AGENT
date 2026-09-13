@@ -19,6 +19,7 @@ import {
   mkdirSync,
   existsSync,
   writeFileSync,
+  readdirSync,
 } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -87,6 +88,18 @@ async function build() {
   const cssPath = join(__dirname, 'src/ui/popup.css');
   if (existsSync(cssPath)) {
     copyFileSync(cssPath, join(distDir, 'popup.css'));
+  }
+
+  // 6. Copy ONNX model assets → dist/{target}/models/
+  // Models are accessed by the service worker at chrome-extension://<id>/models/*.onnx
+  const modelsSrc = join(__dirname, 'assets/models');
+  const modelsDst = join(distDir, 'models');
+  if (existsSync(modelsSrc)) {
+    mkdirSync(modelsDst, { recursive: true });
+    for (const f of readdirSync(modelsSrc)) {
+      copyFileSync(join(modelsSrc, f), join(modelsDst, f));
+    }
+    console.log(`  → Copied models: ${readdirSync(modelsSrc).join(', ')}`);
   }
 
   const elapsed = Date.now() - startTime;
