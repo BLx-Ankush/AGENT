@@ -2,181 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ANTARDRISHTI — ORT Smoke Test</title>
-  <style>
-    body {
-      font-family: 'Courier New', monospace;
-      background: #0f1117;
-      color: #e2e8f0;
-      margin: 0;
-      padding: 24px;
-      font-size: 13px;
-    }
-    h1 { color: #7c3aed; margin-bottom: 4px; }
-    .subtitle { color: #6b7280; margin-bottom: 24px; }
-    .log { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 8px; padding: 16px; }
-    .log-line { margin: 2px 0; }
-    .pass  { color: #4ade80; }
-    .fail  { color: #f87171; }
-    .info  { color: #93c5fd; }
-    .warn  { color: #fbbf24; }
-    .dim   { color: #6b7280; }
-    .summary { margin-top: 20px; padding: 16px; border-radius: 8px; font-size: 15px; font-weight: bold; }
-    .summary.ok { background: rgba(74,222,128,0.1); border: 1px solid #4ade80; color: #4ade80; }
-    .summary.err { background: rgba(248,113,113,0.1); border: 1px solid #f87171; color: #f87171; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANTARDRISHTI — ORT WASM Smoke Test</title>
+  <link rel="stylesheet" href="ort-smoke-test.css">
 </head>
 <body>
-  <h1>ANTARDRISHTI ORT Smoke Test</h1>
-  <div class="subtitle">Verifies ONNX Runtime Web initialization in Chrome MV3 extension context</div>
-  <div class="log" id="log"></div>
-  <div class="summary" id="summary"></div>
+  <header>
+    <h1>ANTARDRISHTI ORT Smoke Test</h1>
+    <p class="subtitle">Chrome MV3 · WASM backend · onnxruntime-web 1.29.0</p>
+  </header>
 
-<script type="module">
-  const logEl = document.getElementById('log');
-  const summaryEl = document.getElementById('summary');
+  <main>
+    <div class="log" id="log" aria-label="Test output log" role="log"></div>
+    <div class="summary" id="summary" aria-live="polite"></div>
+  </main>
 
-  function log(cls, msg) {
-    const line = document.createElement('div');
-    line.className = `log-line ${cls}`;
-    line.textContent = msg;
-    logEl.appendChild(line);
-    console.log(msg);
-  }
-
-  let passed = 0, failed = 0;
-
-  function assert(cond, msg) {
-    if (cond) { log('pass', `  ✅ ${msg}`); passed++; }
-    else { log('fail', `  ❌ FAIL: ${msg}`); failed++; }
-    return cond;
-  }
-
-  async function runSmoke() {
-    log('info', '══════════════════════════════════════════════════');
-    log('info', '  ANTARDRISHTI — ORT Smoke Test  (extension page)');
-    log('info', '══════════════════════════════════════════════════');
-
-    // ── S1: Environment detection ────────────────────────────
-    log('info', '\n── S1: Environment ─────────────────────────────────');
-    log('dim', `  chrome.runtime.id = ${chrome.runtime.id}`);
-    const wasmBaseUrl = chrome.runtime.getURL('ort/');
-    log('dim', `  ORT WASM base URL = ${wasmBaseUrl}`);
-    assert(wasmBaseUrl.startsWith('chrome-extension://'), 'URL is chrome-extension:// protocol');
-
-    // ── S2: WASM files accessible ────────────────────────────
-    log('info', '\n── S2: WASM binary accessibility ───────────────────');
-    const wasmUrl = chrome.runtime.getURL('ort/ort-wasm-simd-threaded.wasm');
-    try {
-      const resp = await fetch(wasmUrl);
-      assert(resp.ok, `ort-wasm-simd-threaded.wasm reachable (status=${resp.status})`);
-      const size = (resp.headers.get('content-length') || '?');
-      log('dim', `  File size reported: ${size} bytes`);
-    } catch(e) {
-      assert(false, `ort-wasm-simd-threaded.wasm fetch failed: ${e.message}`);
-      log('fail', '⚠ Cannot continue — WASM binary not found in extension assets.');
-      finish(); return;
-    }
-
-    // ── S3: Load ONNX Runtime ────────────────────────────────
-    log('info', '\n── S3: ONNX Runtime Web import ─────────────────────');
-    let ort;
-    try {
-      ort = await import(chrome.runtime.getURL('onnxruntime-web'));
-    } catch(e1) {
-      // Fallback: import via package name (esbuild-bundled path won't work here)
-      // In smoke test page context, try to get ort from the service worker
-      // OR use a direct script import
-      log('warn', `  Dynamic import failed (${e1.message}), trying globalThis.ort…`);
-      ort = globalThis.ort || null;
-    }
-    if (!ort) {
-      log('warn', '  ORT not available as a standalone import in extension page context.');
-      log('info', '  → This smoke test should be run from the SERVICE WORKER context, not a page.');
-      log('info', '  → In the service worker DevTools console, run: postMessage({type:"ORT_SMOKE"})');
-      log('info', '  → Or check the service worker console for initialization logs directly.');
-      passed++;
-      finish(); return;
-    }
-
-    // ── S4: Configure ORT env ────────────────────────────────
-    log('info', '\n── S4: ORT env configuration ───────────────────────');
-    ort.env.wasm.numThreads = 1;
-    ort.env.wasm.wasmPaths = chrome.runtime.getURL('ort/');
-    log('dim', `  numThreads = ${ort.env.wasm.numThreads}`);
-    log('dim', `  wasmPaths = ${ort.env.wasm.wasmPaths}`);
-    assert(ort.env.wasm.numThreads === 1, 'numThreads=1 (no SharedArrayBuffer needed)');
-    assert(ort.env.wasm.wasmPaths !== undefined, 'wasmPaths configured');
-
-    // ── S5: One-model smoke inference (face-detector, 0.5MB) ──
-    log('info', '\n── S5: One-model WASM inference (face-detector) ────');
-    const modelUrl = chrome.runtime.getURL('models/face-detector.onnx');
-    let t0 = performance.now();
-    let session;
-    try {
-      const resp = await fetch(modelUrl);
-      assert(resp.ok, `face-detector.onnx accessible (${resp.status})`);
-      const modelBytes = await resp.arrayBuffer();
-      const loadMs = (performance.now() - t0).toFixed(0);
-      log('dim', `  Model fetch: ${loadMs}ms, bytes: ${modelBytes.byteLength}`);
-
-      t0 = performance.now();
-      session = await ort.InferenceSession.create(modelBytes, {
-        executionProviders: [{ name: 'wasm' }],
-        graphOptimizationLevel: 'all',
-      });
-      const initMs = (performance.now() - t0).toFixed(0);
-      assert(session !== null, `Session created in ${initMs}ms`);
-      log('dim', `  Input names: ${session.inputNames.join(', ')}`);
-      log('dim', `  Output names: ${session.outputNames.join(', ')}`);
-
-      // ── S6: Run one inference ──────────────────────────────
-      log('info', '\n── S6: Inference execution ─────────────────────────');
-      // face-detector expects [1,3,128,128] float32 input
-      const inputSize = 1 * 3 * 128 * 128;
-      const inputData = new Float32Array(inputSize).fill(0.5);
-      const inputName = session.inputNames[0];
-      const feeds = { [inputName]: new ort.Tensor('float32', inputData, [1, 3, 128, 128]) };
-
-      t0 = performance.now();
-      const results = await session.run(feeds);
-      const inferMs = (performance.now() - t0).toFixed(1);
-
-      const outputName = Object.keys(results)[0];
-      const outputTensor = results[outputName];
-      assert(outputTensor !== undefined, `Output tensor "${outputName}" present`);
-      assert(outputTensor.dims.length > 0, `Output has shape: [${outputTensor.dims.join(',')}]`);
-      log('dim', `  Inference latency: ${inferMs}ms`);
-      log('dim', `  Output shape: [${outputTensor.dims.join(',')}]`);
-      log('dim', `  Backend: wasm (SIMD, numThreads=1)`);
-
-      assert(parseFloat(inferMs) < 5000, `Inference completed in ${inferMs}ms (< 5000ms threshold)`);
-
-    } catch(e) {
-      assert(false, `Smoke inference failed: ${e.message}`);
-      log('fail', `  Error details: ${e.stack || e}`);
-    } finally {
-      session?.release?.();
-    }
-
-    finish();
-  }
-
-  function finish() {
-    log('info', '\n══════════════════════════════════════════════════');
-    log('info', `  Smoke test: ${passed} passed, ${failed} failed`);
-    log('info', '══════════════════════════════════════════════════');
-
-    summaryEl.className = `summary ${failed === 0 ? 'ok' : 'err'}`;
-    summaryEl.textContent = failed === 0
-      ? `✅ ORT Smoke Test PASSED (${passed}/${passed+failed}) — WASM backend operational`
-      : `❌ ORT Smoke Test FAILED (${failed} failures) — See log above`;
-  }
-
-  runSmoke().catch(e => {
-    log('fail', `Unhandled error: ${e.message}`);
-    finish();
-  });
-</script>
+  <!-- External script only — no inline JS (extension CSP: script-src 'self') -->
+  <script src="ort-smoke-test.js"></script>
 </body>
 </html>

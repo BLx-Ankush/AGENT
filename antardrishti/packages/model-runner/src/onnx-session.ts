@@ -218,46 +218,43 @@ export class OnnxSession implements InferenceSession {
   }
 
   /**
-   * Load ONNX Runtime Web and configure the WASM environment for
-   * Chrome MV3 service worker compatibility.
+   * Load ONNX Runtime Web (WASM-only entry point) for MV3 service worker.
    *
-   * ROOT CAUSE FIX for "XMLHttpRequest is not defined":
-   *   ORT 1.29 attempts to load its .wasm binary from a URL derived
-   *   from import.meta.url. In service workers, window/document are
-   *   absent. ORT's fallback path uses XMLHttpRequest, which is NOT
-   *   available in service workers.
+   * SECOND ROOT CAUSE FIX:
+   *   import('onnxruntime-web') loads ort.bundle.min.mjs (404KB) which
+   *   includes the full JSEP/WebGPU execution provider. ORT auto-initialises
+   *   the JSEP backend and loads ort-wasm-simd-threaded.jsep.mjs whose
+   *   internal loader falls back to XMLHttpRequest (not in service workers).
    *
-   * FIX:
-   *   1. Set ort.env.wasm.wasmPaths to chrome.runtime.getURL('ort/')
-   *      → ORT uses fetch() on this explicit URL (no XHR fallback)
-   *   2. Set ort.env.wasm.numThreads = 1
-   *      → Disables SharedArrayBuffer/Worker threading requirement
-   *      → Compatible with MV3 service workers (no SAB, no Atomics.wait)
-   *   3. WASM binaries bundled extension-local in dist/ort/:
-   *      ort-wasm-simd-threaded.wasm      → WASM backend
-   *      ort-wasm-simd-threaded.jsep.wasm → WebGPU/JSEP backend
+   *   FIX: import('onnxruntime-web/wasm') → ort.wasm.bundle.min.mjs (71KB).
+   *   This is the WASM-EP-only bundle. JSEP/WebGPU EP is never registered.
+   *   ort-wasm-simd-threaded.jsep.mjs is never touched.
    *
-   * SIMD: enabled (SIMD is supported in all Chromium service workers).
-   * Threads: DISABLED (numThreads=1) — no SharedArrayBuffer required.
-   * WebGPU (JSEP): available if navigator.gpu is present.
+   * WASM runtime assets (extension-local, no CDN):
+   *   ort-wasm-simd-threaded.mjs   → thread worker bootstrap (24KB)
+   *   ort-wasm-simd-threaded.wasm  → WASM binary (13.3MB, SIMD)
+   *
+   * For a future WebGPU path, switch to import('onnxruntime-web/webgpu')
+   * and configure jsep.mjs + jsep.wasm paths separately.
    */
   private async loadOnnxRuntime(): Promise<any> {
     let ort: any;
     try {
-      // esbuild bundles onnxruntime-web inline into service-worker.js.
-      // The .wasm binary is NOT inlined — it is loaded at runtime via
-      // the configured wasmPaths URL.
-      ort = await import('onnxruntime-web');
+      // WASM-only ORT bundle — esbuild resolves to ort.wasm.bundle.min.mjs.
+      // No JSEP/WebGPU EP registered. No jsep.mjs ever loaded.
+      ort = await import('onnxruntime-web/wasm');
     } catch {
-      // Fallback: ort loaded as global via script tag (offscreen page)
+      // Fallback: ort loaded as global via script tag (offscreen page context)
       if ((globalThis as any).ort) {
         ort = (globalThis as any).ort;
       } else {
         throw new Error(
-          'ONNX Runtime Web not available. Ensure it is bundled with the extension.',
+          'ONNX Runtime Web not available. Ensure onnxruntime-web/wasm is bundled.',
         );
       }
     }
+
+    console.log('[OnnxSession] ORT runtime loaded (WASM-only bundle)');
 
     // Configure ORT WASM environment (once per extension lifetime)
     OnnxSession.configureOrtEnv(ort);
@@ -267,10 +264,19 @@ export class OnnxSession implements InferenceSession {
 
   /**
    * Configure ORT WASM environment for MV3 service worker compatibility.
-   * Must be called before any InferenceSession.create().
    *
-   * This is a static method to guarantee it is only configured once
-   * regardless of how many OnnxSession instances are created in parallel.
+   * MUST be called before any InferenceSession.create().
+   * Static flag ensures configuration runs exactly once even when
+   * 4 sessions are initialised in parallel via Promise.all().
+   *
+   * wasmPaths OBJECT format (confirmed from ORT 1.29 source):
+   *   let c = o?.mjs   ← property key 'mjs'
+   *   let m = o?.wasm  ← property key 'wasm'
+   * NOT filename-keyed. NOT a string map.
+   *
+   * numThreads=1 ensures no SharedArrayBuffer is required:
+   *   - MV3 service workers have no SAB and cannot call Atomics.wait()
+   *   - ort-wasm-simd-threaded.wasm works at numThreads=1 (no threads activated)
    */
   private static _ortEnvConfigured = false;
 
@@ -278,32 +284,29 @@ export class OnnxSession implements InferenceSession {
     if (OnnxSession._ortEnvConfigured) return;
     OnnxSession._ortEnvConfigured = true;
 
-    // ── WASM thread configuration ─────────────────────────────
-    // numThreads=1: disables SharedArrayBuffer threading.
-    // MV3 service workers do not have SharedArrayBuffer or Atomics.wait().
-    // The threaded WASM binary (ort-wasm-simd-threaded.wasm) still works
-    // correctly with numThreads=1 — threading is simply not activated.
+    // ── Disable threading (no SharedArrayBuffer in MV3 SW) ────
     ort.env.wasm.numThreads = 1;
 
-    // ── WASM binary path configuration ───────────────────────
-    // Points ORT to the extension-local WASM binaries.
-    // Prevents ORT from attempting to derive the path from import.meta.url
-    // (which would produce a chrome-extension:// URL that ORT can't find)
-    // and then falling back to the XHR loader (not available in SW).
-    //
-    // With an explicit string prefix, ORT uses fetch() on:
-    //   <prefix>ort-wasm-simd-threaded.wasm        (WASM backend)
-    //   <prefix>ort-wasm-simd-threaded.jsep.wasm   (WebGPU/JSEP backend)
+    // ── Explicit WASM asset paths ─────────────────────────────
+    // ORT 1.29 wasmPaths object API: { mjs: string, wasm: string }
+    //   mjs  → thread worker bootstrap (loaded via new URL(O, mjs).href)
+    //   wasm → WASM binary (loaded via locateFile returning this URL)
+    // With numThreads=1 no worker thread is created, but providing
+    // both URLs prevents any fallback URL-derivation that could hit XHR.
     try {
-      const wasmBase = (globalThis as any).chrome?.runtime?.getURL('ort/');
-      if (wasmBase) {
-        ort.env.wasm.wasmPaths = wasmBase;
-        console.log('[ModelRuntime] ORT WASM paths configured:', wasmBase);
+      const getUrl = (globalThis as any).chrome?.runtime?.getURL;
+      if (typeof getUrl === 'function') {
+        const mjsPath  = getUrl.call((globalThis as any).chrome.runtime, 'ort/ort-wasm-simd-threaded.mjs');
+        const wasmPath = getUrl.call((globalThis as any).chrome.runtime, 'ort/ort-wasm-simd-threaded.wasm');
+
+        ort.env.wasm.wasmPaths = { mjs: mjsPath, wasm: wasmPath };
+
+        console.log('[OnnxSession] WASM mjs  path=', mjsPath);
+        console.log('[OnnxSession] WASM wasm path=', wasmPath);
       }
     } catch {
-      // Non-extension context (Node.js test): leave wasmPaths unset,
-      // ORT will use the Node.js file resolver.
-      console.log('[ModelRuntime] Non-extension context: using default ORT path resolution');
+      // Node.js test context — no chrome API. ORT uses its own resolver.
+      console.log('[ModelRuntime] Non-extension context: default ORT path resolution');
     }
 
     console.log('[ModelRuntime] ORT env configured:', {
