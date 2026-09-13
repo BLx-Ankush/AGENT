@@ -1,0 +1,266 @@
+{
+  "meta": {
+    "timestamp": "2026-09-13T07:05:02.329Z",
+    "fixture": "apps/demo-page/index.html",
+    "backend": "onnxruntime-node/cpu",
+    "nodeVersion": "v24.11.0",
+    "platform": "win32",
+    "runCount": 30,
+    "chromeWebGPU": "NOT_RUN -- requires live Chrome extension. Expected 3-8x faster [EXTERNAL: ONNX Runtime WebGPU benchmarks]."
+  },
+  "piiEval": {
+    "TP": 8,
+    "FP": 3,
+    "FN": 4,
+    "precision": 0.7272727272727273,
+    "recall": 0.6666666666666666,
+    "f1": 0.6956521739130435,
+    "byCategory": {
+      "email": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "phone": {
+        "tp": 1,
+        "fp": 3,
+        "fn": 0
+      },
+      "pan": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "aadhaar": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "credit-card": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "password": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1
+      },
+      "jwt": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "api-key": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "otp": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1
+      },
+      "ifsc": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "address": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1
+      },
+      "account-number": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1
+      }
+    },
+    "gtCount": 12,
+    "detectedCount": 11,
+    "visualOnlyGt": 1,
+    "note": "GT-PII-09 (canvas account number) requires OCR -- excluded from DOM precision/recall"
+  },
+  "visualEval": {
+    "textDetector": {
+      "pixelsAbove03": 3220,
+      "textRatio": "0.0079",
+      "latencyMs": 170
+    },
+    "regionParser": {
+      "uiDetections": 24,
+      "maxConf": "0.878",
+      "latencyMs": 78
+    },
+    "faceDetector": {
+      "N": 0,
+      "dims": [
+        1,
+        0,
+        16
+      ],
+      "box": null,
+      "latencyMs": 3
+    },
+    "gtRegions": 8,
+    "detectedRegions": 6,
+    "recall": "0.7500",
+    "textPixelIoU": "0.0262",
+    "note": "Pixel IoU uses 30% GT text coverage estimate from fixture layout analysis. Precision=1.0 assumed (all detections in-scope)."
+  },
+  "redactionEval": {
+    "piou": "0.0000",
+    "overRedaction": "0.0000",
+    "underRedaction": "0.1252",
+    "utilityRetention": "1.0000",
+    "adversarialLeakPixels": 0,
+    "plannedRegions": 5,
+    "gtRegions": 5,
+    "latencyMs": 3
+  },
+  "latencyEval": {
+    "configs": [
+      {
+        "config": "Chrome+WASM (onnxruntime-node/cpu proxy)",
+        "runs": 30,
+        "stages": {
+          "capture": {
+            "p50ms": "0.00",
+            "p95ms": "0.00",
+            "meanMs": "0.00"
+          },
+          "harvest": {
+            "p50ms": "0.16",
+            "p95ms": "0.38",
+            "meanMs": "0.20"
+          },
+          "forbidden": {
+            "p50ms": "0.01",
+            "p95ms": "0.02",
+            "meanMs": "0.01"
+          },
+          "total": {
+            "p50ms": "0.18",
+            "p95ms": "0.43",
+            "meanMs": "0.21"
+          }
+        }
+      },
+      {
+        "config": "Firefox+WASM (same CPU backend, identical timing)",
+        "runs": 30,
+        "note": "Browser-specific scheduling overhead requires live browser measurement."
+      },
+      {
+        "config": "Chrome+WebGPU",
+        "runs": 0,
+        "status": "NOT_RUN",
+        "note": "Requires live Chrome extension. Expected 3-8x speedup [EXTERNAL benchmark]."
+      }
+    ],
+    "note": "Full E2E = pipeline + ONNX inference. Pipeline latency measured here; ONNX inference in S2+S5."
+  },
+  "resourceEval": {
+    "loadTimes": {
+      "text-detector": 154,
+      "ocr-recognizer": 212,
+      "face-detector": 31,
+      "ui-region-detector": 121
+    },
+    "modelSizesMB": {
+      "text-detector": "4.75",
+      "ocr-recognizer": "10.82",
+      "face-detector": "0.54",
+      "ui-region-detector": "12.14"
+    },
+    "totalModelSizeMB": "28.24",
+    "heapBeforeMB": "11.6",
+    "heapAfterMB": "11.7",
+    "heapDeltaMB": "0.1",
+    "rssMB": "204.5",
+    "gpu": "N/A -- CPU backend",
+    "inferenceCountPerRun": 4,
+    "estimatedCaptureBytes": {
+      "mainCapture1920x1080RGBA": 8294400,
+      "faceCrop128x128": 65536,
+      "ocrCrop320x48": 61440
+    }
+  },
+  "payloadEval": {
+    "payloadSizeChars": 978,
+    "egressVerdict": "APPROVED",
+    "leaks": [],
+    "leakCount": 0,
+    "opaqueTokens": 11,
+    "pass": true,
+    "piiDetected": 11,
+    "vaultTokensStored": 0,
+    "probeResults": [
+      {
+        "label": "PAN",
+        "leaked": false
+      },
+      {
+        "label": "Aadhaar",
+        "leaked": false
+      },
+      {
+        "label": "CreditCard",
+        "leaked": false
+      },
+      {
+        "label": "Password",
+        "leaked": false
+      },
+      {
+        "label": "JWT",
+        "leaked": false
+      },
+      {
+        "label": "APIKey",
+        "leaked": false
+      },
+      {
+        "label": "OTP",
+        "leaked": false
+      },
+      {
+        "label": "ScreenshotB64",
+        "leaked": false
+      },
+      {
+        "label": "FaceB64",
+        "leaked": false
+      },
+      {
+        "label": "RawOCR",
+        "leaked": false
+      },
+      {
+        "label": "VaultRaw",
+        "leaked": false
+      }
+    ]
+  },
+  "testSuites": [
+    {
+      "label": "Security S01-S38",
+      "exitCode": 0,
+      "passed": 38,
+      "failed": 0
+    },
+    {
+      "label": "Attack A01-A16",
+      "exitCode": 0,
+      "passed": 16,
+      "failed": 0
+    },
+    {
+      "label": "E2E Demo E01-E13",
+      "exitCode": 0,
+      "passed": -1,
+      "failed": 0
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "_comment": "Ground-truth PII entities for SecureBank fixture (apps/demo-page/index.html). All values are fictitious test data.",
+  "_fixture": "apps/demo-page/index.html",
+  "_version": "1.0",
+  "entities": [
+    { "id": "GT-PII-01", "category": "email",          "value": "ravi.shankar@example.com",                            "source": "DOM", "element": "#email",          "tier": "pattern-matched" },
+    { "id": "GT-PII-02", "category": "phone",          "value": "+91 98765 43210",                                  "source": "DOM", "element": "#phone",          "tier": "pattern-matched" },
+    { "id": "GT-PII-03", "category": "pan",            "value": "ABCDE1234F",                                       "source": "DOM", "element": "#pan",            "tier": "pattern-matched" },
+    { "id": "GT-PII-04", "category": "aadhaar",        "value": "2234 5679 8012",                                   "source": "DOM", "element": "#aadhaar",        "tier": "checksum-verified" },
+    { "id": "GT-PII-05", "category": "credit-card",    "value": "4111 1111 1111 1111",                              "source": "DOM", "element": "#card-number",    "tier": "checksum-verified" },
+    { "id": "GT-PII-06", "category": "password",       "value": "SuperSecret@123!",                                 "source": "DOM", "element": "#password",       "tier": "context-inferred" },
+    { "id": "GT-PII-07", "category": "jwt",            "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlJhdmkgU2hhbmthciJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "source": "DOM", "element": ".sensitive-display", "tier": "pattern-matched" },
+    { "id": "GT-PII-08", "category": "api-key",        "value": "sk-proj-abcdefghijklmnopqrstuvwxyz123456",         "source": "DOM", "element": "#api-key",        "tier": "pattern-matched" },
+    { "id": "GT-PII-09", "category": "account-number", "value": "1234 5678 9012 3456",                              "source": "VISUAL_CANVAS", "element": "#account-canvas", "tier": "ocr-detected", "_note": "Visual-only, not in DOM text" },
+    { "id": "GT-PII-10", "category": "otp",            "value": "847291",                                           "source": "DOM", "element": "p.info-text",     "tier": "context-inferred" },
+    { "id": "GT-PII-11", "category": "ifsc",           "value": "SBIN0001234",                                      "source": "DOM", "element": "#ifsc",           "tier": "pattern-matched" },
+    { "id": "GT-PII-12", "category": "address",        "value": "42 MG Road, Bengaluru, Karnataka 560001",          "source": "DOM", "element": "#address",        "tier": "context-inferred" },
+    { "id": "GT-PII-13", "category": "account-number", "value": "9876543210987654",                                 "source": "DOM", "element": "#beneficiary-acc","tier": "pattern-matched" }
+  ],
+  "totalCount": 13,
+  "domDetectable": 12,
+  "visualOnly": 1
+}

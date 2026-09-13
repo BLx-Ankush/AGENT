@@ -1,0 +1,18 @@
+{
+  "_comment": "Ground-truth visual regions for SecureBank fixture. Regions are conceptual (relative) as pixel coords depend on viewport.",
+  "_fixture": "apps/demo-page/index.html",
+  "_version": "1.0",
+  "regions": [
+    { "id": "GT-VIS-01", "type": "face-avatar",       "element": "#face-avatar",       "description": "Canvas-rendered face avatar (biometric visual region)", "sensitive": true,  "canvasRendered": true,  "domText": false },
+    { "id": "GT-VIS-02", "type": "account-number",    "element": "#account-canvas",    "description": "Visual-only account number 1234 5678 9012 3456 in canvas", "sensitive": true,  "canvasRendered": true,  "domText": false },
+    { "id": "GT-VIS-03", "type": "ui-control-canvas", "element": "#pay-now-btn",        "description": "Canvas-rendered Pay Now button (visual control)", "sensitive": false, "canvasRendered": true,  "domText": false },
+    { "id": "GT-VIS-04", "type": "form-field",        "element": "#pan",               "description": "PAN input field with identity value", "sensitive": true,  "canvasRendered": false, "domText": true  },
+    { "id": "GT-VIS-05", "type": "form-field",        "element": "#aadhaar",           "description": "Aadhaar input field", "sensitive": true,  "canvasRendered": false, "domText": true  },
+    { "id": "GT-VIS-06", "type": "form-field",        "element": "#card-number",       "description": "Credit card number field", "sensitive": true,  "canvasRendered": false, "domText": true  },
+    { "id": "GT-VIS-07", "type": "form-field",        "element": "#password",          "description": "Password field (type=password)", "sensitive": true,  "canvasRendered": false, "domText": true  },
+    { "id": "GT-VIS-08", "type": "injection-banner",  "element": ".injection-banner",  "description": "Prompt injection attack banner", "sensitive": false, "canvasRendered": false, "domText": true  }
+  ],
+  "totalCount": 8,
+  "canvasRendered": 3,
+  "sensitive": 6
+}

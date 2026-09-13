@@ -1,0 +1,18 @@
+{
+  "_comment": "Ground-truth UI controls (actionable elements) in SecureBank fixture.",
+  "_fixture": "apps/demo-page/index.html",
+  "_version": "1.0",
+  "controls": [
+    { "id": "GT-UI-01", "type": "button",        "element": "#transferBtn",   "label": "Send Rs.25,000",   "destructive": false, "domAccessible": true  },
+    { "id": "GT-UI-02", "type": "button",        "element": "#deleteBtn",     "label": "Delete Account",   "destructive": true,  "domAccessible": true  },
+    { "id": "GT-UI-03", "type": "canvas-button", "element": "#pay-now-btn",   "label": "Pay Now",          "destructive": false, "domAccessible": true,  "ariaLabel": "Pay Now", "visualOnly": true },
+    { "id": "GT-UI-04", "type": "input",         "element": "#pay-amount",    "label": "Amount (Rs.)",     "destructive": false, "domAccessible": true  },
+    { "id": "GT-UI-05", "type": "input",         "element": "#transfer-amount","label": "Amount (Rs.)",    "destructive": false, "domAccessible": true  },
+    { "id": "GT-UI-06", "type": "input",         "element": "#otp",           "label": "OTP",              "destructive": false, "domAccessible": true  },
+    { "id": "GT-UI-07", "type": "input",         "element": "#username",      "label": "Username",         "destructive": false, "domAccessible": true  },
+    { "id": "GT-UI-08", "type": "input",         "element": "#password",      "label": "Password",         "destructive": false, "domAccessible": true  }
+  ],
+  "totalCount": 8,
+  "destructive": 1,
+  "visualOnly": 1
+}
