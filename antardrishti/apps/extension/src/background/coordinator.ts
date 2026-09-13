@@ -1,13 +1,21 @@
 /**
- * ANTARDRISHTI — Session Coordinator (Phase 7 — Full Pipeline)
+ * ANTARDRISHTI — Session Coordinator (Production-Ready Full Pipeline)
  *
- * Orchestrates the complete 13-step flow:
- *   USER TASK → LOCAL SANITIZATION → DOM + A11Y HARVEST →
- *   VISIBLE TAB CAPTURE → CHANGED-TILE ROUTING →
- *   LOCAL VISUAL PERCEPTION → SEMANTIC VISUAL RECOGNITION →
- *   VISUAL GROUNDING → DOM ↔ VISUAL RECONCILIATION →
- *   LOCAL PRIVACY CLASSIFICATION → TOKENIZATION / REDACTION →
- *   EXPLICIT REDACTION SCHEME → INDEPENDENT EGRESS VERIFICATION
+ * Orchestrates the complete production flow:
+ *   BROWSER EVENT
+ *   → CAPTURE
+ *   → DOM/A11y HARVEST
+ *   → CANVAS CONTEXT EXTRACTION
+ *   → LOCAL PERCEPTION PIPELINE (real visual inference)
+ *   → UNIFIED SCENE GRAPH
+ *   → PRIVACY ENGINE
+ *   → SANITIZED REQUEST
+ *   → INDEPENDENT EGRESS VERIFIER
+ *   → REMOTE PLANNER
+ *   → LOCAL ACTION SAFETY GATE
+ *   → TOKEN REDEMPTION (vault only)
+ *   → ONE ACTION
+ *   → RE-OBSERVE
  *
  * State persists across service worker suspension.
  */
@@ -38,8 +46,20 @@ import {
   type PlannerResponse,
 } from '@antardrishti/planner';
 import { validatePlan, type SceneContext } from '@antardrishti/planner';
+import {
+  PerceptionPipeline,
+  type PerceptionResult,
+  type CanvasRegionData,
+} from '@antardrishti/model-runner';
+import type { SceneNode, SensitivityFinding } from '@antardrishti/scene-graph';
 
 import { CaptureManager } from './capture';
+
+// ── Action kinds that require re-observation after execution ──
+
+const STATE_CHANGING_ACTIONS = new Set([
+  'click', 'type_text', 'type_token', 'select', 'submit',
+]);
 
 // ── State ────────────────────────────────────────────────────
 
@@ -72,6 +92,7 @@ export class Coordinator {
   private sanitizer = new Sanitizer(this.vault);
   private verifier = new EgressVerifier();
   private planner: PlannerAdapter = new DeterministicPlanner();
+  private perception = new PerceptionPipeline();
 
   // Pending confirmations
   private pendingConfirmations = new Map<
@@ -196,40 +217,125 @@ export class Coordinator {
       const captureResult = await this.capture.captureVisibleTab(
         payload.tabId,
       );
-      console.log('[Coordinator] [1/7] Captured:', {
+      console.log('[Coordinator] [1/8] Captured:', {
         obs: captureResult.observationId,
         tiles: captureResult.tileCount,
         changed: captureResult.changedTileIds.length,
+        bytes: captureResult.imageDataUrl.length,
       });
 
-      // ── Step 2: Request DOM harvest from content script ──
+      // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
         payload.tabId,
         captureResult.observationId,
       );
-      console.log('[Coordinator] [2/7] Harvested:', {
+      console.log('[Coordinator] [2/8] Harvested:', {
         nodes: harvestResult?.nodeCount || 0,
+        canvasTexts: harvestResult?.canvasContext?.canvasTexts?.length || 0,
+        faceRegions: harvestResult?.canvasContext?.faceRegions?.length || 0,
+        controlRegions: harvestResult?.canvasContext?.controlRegions?.length || 0,
       });
 
-      // ── Step 3: Sanitize ─────────────────────────────────
+      // ── Step 3: Local perception pipeline ───────────────
+      this.setPhase('perceiving' as any);
+      const perceptionStart = performance.now();
+
+      // Convert data URL to ImageData for perception
+      // (OffscreenCanvas available in service worker context Chrome 109+)
+      let imageData: ImageData | null = null;
+      try {
+        imageData = await this.dataUrlToImageData(
+          captureResult.imageDataUrl,
+          captureResult.width,
+          captureResult.height,
+        );
+      } catch (e) {
+        console.warn('[Coordinator] ImageData conversion failed, skipping pixel perception:', e);
+      }
+
+      // Build tile rects from changed tile IDs
+      const changedTileRects = this.buildTileRects(
+        captureResult.changedTileIds,
+        captureResult.width,
+        captureResult.height,
+      );
+
+      let perceptionResult: PerceptionResult | null = null;
+      if (imageData) {
+        const canvasCtx: CanvasRegionData = {
+          canvasTexts: harvestResult?.canvasContext?.canvasTexts || [],
+          faceRegions: harvestResult?.canvasContext?.faceRegions || [],
+          controlRegions: harvestResult?.canvasContext?.controlRegions || [],
+        };
+
+        perceptionResult = await this.perception.run(
+          imageData,
+          changedTileRects,
+          captureResult.observationId as string,
+          0, // frameId
+          captureResult.stamp.documentGeneration,
+          canvasCtx,
+        );
+
+        const perceptionMs = Math.round(performance.now() - perceptionStart);
+        console.log('[Coordinator] [3/8] Perception complete:', {
+          totalMs: perceptionMs,
+          textRegions: perceptionResult.textRegions.length,
+          ocrResults: perceptionResult.ocrResults.length,
+          faceDetections: perceptionResult.faceDetections.length,
+          semanticRegions: perceptionResult.semanticRegions.length,
+          groundings: perceptionResult.groundings.length,
+          modelsInvoked: perceptionResult.metrics.length,
+          groundedTargets: perceptionResult.groundings.filter(g => g.candidateTargetId !== null).length,
+        });
+      } else {
+        console.log('[Coordinator] [3/8] Perception skipped (no ImageData)');
+      }
+
+      // ── Step 4: Build unified scene graph ──────────────────
+      // Merge DOM nodes with visual-only nodes from perception
+      const domNodes: SceneNode[] = harvestResult?.nodes || [];
+      const visualNodes: SceneNode[] = perceptionResult
+        ? this.groundingsToSceneNodes(
+            perceptionResult,
+            captureResult.observationId as string,
+            captureResult.stamp.documentGeneration,
+          )
+        : [];
+
+      const unifiedNodes = [...domNodes, ...visualNodes];
+      console.log('[Coordinator] [4/8] Unified scene:', {
+        domNodes: domNodes.length,
+        visualNodes: visualNodes.length,
+        total: unifiedNodes.length,
+      });
+
+      // ── Step 5: Sanitize unified scene ─────────────────────
       this.setPhase('sanitizing');
-      const nodes = harvestResult?.nodes || [];
       const sanitized = this.sanitizer.sanitize(
         payload.rawTask,
-        nodes,
+        unifiedNodes,
         this.state.sessionId!,
         payload.tabId,
         0, // frameId
         captureResult.stamp.documentGeneration,
         captureResult.stamp.topOrigin,
       );
-      console.log('[Coordinator] [3/7] Sanitized:', {
+
+      // Update visual coverage based on perception results
+      const visualCoverage = perceptionResult && perceptionResult.groundings.length > 0
+        ? 'full' as const
+        : perceptionResult ? 'partial' as const : 'none' as const;
+      sanitized.scene.coverage.visualGrounding = visualCoverage;
+
+      console.log('[Coordinator] [5/8] Sanitized:', {
         redactions: sanitized.redactions.length,
         nodes: sanitized.scene.nodes.length,
         risk: sanitized.risk,
+        visualCoverage,
       });
 
-      // ── Step 4: Build planner request ────────────────────
+      // ── Step 6: Build planner request ────────────────────
       const plannerRequest: PlannerRequestInput = {
         protocolVersion: '2.0',
         session: {
@@ -257,7 +363,11 @@ export class Coordinator {
         allowedActions: [...ALLOWED_ACTION_KINDS],
       };
 
-      // ── Step 5: Egress verification ──────────────────────
+      // INVARIANT: raw visual observations MUST NOT be in plannerRequest
+      // Raw imageData, ocrResults, faceDetections are local-only
+      // Only sanitized tokens and scene graph enter the egress verifier.
+
+      // ── Step 7: Egress verification ──────────────────────
       this.setPhase('verifying');
       const verification = await this.verifier.verify(
         plannerRequest,
@@ -266,7 +376,7 @@ export class Coordinator {
 
       if (!verification.approved) {
         const block = verification as { reason: string; category: string };
-        console.error('[Coordinator] [5/7] EGRESS BLOCKED:', block.reason);
+        console.error('[Coordinator] [7/8] EGRESS BLOCKED:', block.reason);
         sendResponse({
           ack: false,
           error: `Egress blocked: ${block.reason}`,
@@ -276,30 +386,30 @@ export class Coordinator {
         return;
       }
 
-      console.log('[Coordinator] [5/7] Egress approved:', {
+      console.log('[Coordinator] [7/8] Egress approved:', {
         sealSize: (verification as any).serializedSize,
         bodyHash: (verification as any).bodyHash?.substring(0, 16) + '…',
       });
 
-      // ── Step 6: Plan ─────────────────────────────────────
+      // ── Step 8: Plan ─────────────────────────────────────
       this.setPhase('planning');
       let plannerResponse: PlannerResponse;
 
       try {
         plannerResponse = await this.planner.plan(plannerRequest);
-        console.log('[Coordinator] [6/7] Plan received:', {
+        console.log('[Coordinator] [8/8] Plan received:', {
           planId: plannerResponse.planId,
           actions: plannerResponse.actions.length,
           kinds: plannerResponse.actions.map((a) => a.kind),
         });
       } catch (e) {
-        console.error('[Coordinator] [6/7] Planning failed:', e);
+        console.error('[Coordinator] [8/8] Planning failed:', e);
         sendResponse({ ack: false, error: `Planning failed: ${e}` });
         this.setPhase('idle');
         return;
       }
 
-      // ── Step 7: Validate & execute actions ───────────────
+      // ── Validate plan ────────────────────────────────────
       const nodeIds = new Set(
         sanitized.scene.nodes.map((n) => n.id),
       );
@@ -327,7 +437,7 @@ export class Coordinator {
         const errors = validation.validations
           .flatMap((v) => v.errors)
           .join('; ');
-        console.error('[Coordinator] [7/7] Plan validation failed:', errors);
+        console.error('[Coordinator] Plan validation failed:', errors);
         sendResponse({ ack: false, error: `Plan invalid: ${errors}` });
         this.setPhase('idle');
         return;
@@ -348,11 +458,41 @@ export class Coordinator {
         }
       }
 
-      // Execute actions
+      // ── ONE ACTION → RE-OBSERVE (contract §1.5) ──────────
+      // Execute ONLY the first state-changing action.
+      // Non-state-changing actions (scroll, wait, finish) can be batched.
       this.setPhase('executing');
+      let executedStateChangingAction = false;
+      let executedActionCount = 0;
+
       for (const action of plannerResponse.actions) {
+        const isStateChanging = STATE_CHANGING_ACTIONS.has(action.kind);
+
+        if (isStateChanging && executedStateChangingAction) {
+          // Contract §1.5: stop after first state-changing action
+          // The next pipeline invocation will re-observe and replan
+          console.log('[Coordinator] One-action boundary: halting at', action.kind, '(re-observe required)');
+          break;
+        }
+
         console.log('[Coordinator] Executing:', action.kind, action.id);
-        await this.executeAction(payload.tabId, action);
+        await this.executeAction(
+          payload.tabId,
+          action,
+          captureResult.stamp.documentGeneration,
+          captureResult.stamp.topOrigin,
+        );
+        executedActionCount++;
+
+        if (isStateChanging) {
+          executedStateChangingAction = true;
+          // Invalidate cache so next invocation re-observes
+          this.capture.invalidateCache();
+          console.log('[Coordinator] State-changing action executed — cache invalidated for re-observation');
+        }
+
+        // finish/request_observation terminate the sequence
+        if (action.kind === 'finish' || action.kind === 'request_observation') break;
       }
 
       this.state.lastObservationId = captureResult.observationId as string;
@@ -371,6 +511,13 @@ export class Coordinator {
         redactions: sanitized.redactions.length,
         planId: plannerResponse.planId,
         actions: plannerResponse.actions.length,
+        executedActions: executedActionCount,
+        visualGrounding: {
+          groundings: perceptionResult?.groundings.length || 0,
+          faceDetections: perceptionResult?.faceDetections.length || 0,
+          ocrResults: perceptionResult?.ocrResults.length || 0,
+          perceptionMs: perceptionResult ? Math.round(perceptionResult.totalMs) : 0,
+        },
         pipelineMs,
       });
     } catch (e) {
@@ -403,15 +550,43 @@ export class Coordinator {
   private async executeAction(
     tabId: number,
     action: any,
+    documentGeneration: string,
+    origin: string,
   ): Promise<void> {
     try {
+      // TOKEN REDEMPTION (contract §12):
+      // type_token actions MUST resolve the token from the vault.
+      // The raw value is NEVER passed from planner output directly.
+      // PLANNER OUTPUT → TOKEN REFERENCE → LOCAL VAULT → AUTHORIZED ACTION → REAL VALUE
+      let resolvedValue: string | undefined;
+
+      if (action.kind === 'type_token' && action.token) {
+        const redemption = this.redeemTokenForAction(
+          action.token,
+          action.targetNodeId || '',
+          documentGeneration,
+          origin,
+        );
+        if ('error' in redemption) {
+          console.error('[Coordinator] Token redemption failed:', redemption.error, 'token:', action.token);
+          return; // refuse to execute with unredeemed token
+        }
+        resolvedValue = redemption.value;
+        console.log('[Coordinator] Token redeemed for type_token action');
+      } else if (action.kind === 'type_text') {
+        // type_text uses safe text value (not a vault token)
+        resolvedValue = action.text;
+      }
+
       await chrome.tabs.sendMessage(tabId, createMessage(
         MESSAGE_TYPES.EXECUTE_ACTION,
         {
           actionId: action.id,
           kind: action.kind,
           targetNodeId: action.targetNodeId,
-          value: action.text || action.token,
+          // resolvedValue is the post-redemption value for type_token,
+          // or safe text for type_text. NEVER the raw planner token.
+          value: resolvedValue,
           expectedRole: action.expectedRole,
         },
         'background',
@@ -419,6 +594,33 @@ export class Coordinator {
     } catch (e) {
       console.warn('[Coordinator] Action execution failed:', e);
     }
+  }
+
+  /**
+   * Redeem a vault token for an authorized action.
+   * TOKEN REFERENCE → LOCAL VAULT → AUTHORIZED ACTION → REAL VALUE
+   * (contract §12)
+   */
+  private redeemTokenForAction(
+    token: string,
+    targetNodeId: string,
+    documentGeneration: string,
+    origin: string,
+  ): { value: string } | { error: string } {
+    const grant = this.vault.getGrant(token);
+    if (!grant) return { error: 'GRANT_NOT_FOUND' };
+
+    return this.vault.redeem(
+      token,
+      grant.sessionId,
+      grant.tabId,
+      grant.frameId,
+      documentGeneration,
+      origin,
+      targetNodeId,
+      grant.permittedOperation,
+      grant.actionNonce,
+    );
   }
 
   // ── Confirmations ────────────────────────────────────────
@@ -603,5 +805,186 @@ export class Coordinator {
         createMessage(MESSAGE_TYPES.STATUS_UPDATE, payload, 'background'),
       )
       .catch(() => {});
+  }
+
+  // ── Perception helpers ────────────────────────────────────
+
+  /**
+   * Convert a data URL (PNG from captureVisibleTab) to ImageData.
+   * Uses OffscreenCanvas available in Chrome service workers (109+).
+   */
+  private async dataUrlToImageData(
+    dataUrl: string,
+    width: number,
+    height: number,
+  ): Promise<ImageData> {
+    // In Chrome service workers, OffscreenCanvas + createImageBitmap are available
+    const base64 = dataUrl.split(',')[1];
+    if (!base64) throw new Error('Invalid data URL');
+
+    // Convert base64 to Uint8Array
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    // Create ImageBitmap from PNG bytes
+    const blob = new Blob([bytes], { type: 'image/png' });
+    const bitmap = await createImageBitmap(blob);
+
+    // Draw to OffscreenCanvas to get ImageData
+    const canvas = new OffscreenCanvas(bitmap.width || width, bitmap.height || height);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }
+
+  /**
+   * Build tile rectangles from changed tile IDs.
+   * Tile IDs are in the format "tile-{row}-{col}".
+   */
+  private buildTileRects(
+    changedTileIds: string[],
+    viewportWidth: number,
+    viewportHeight: number,
+  ): Array<{ x: number; y: number; w: number; h: number }> {
+    const TILE_SIZE = 256;
+    const rects: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+    for (const tileId of changedTileIds) {
+      const match = tileId.match(/^tile-(\d+)-(\d+)$/);
+      if (!match) continue;
+      const row = parseInt(match[1], 10);
+      const col = parseInt(match[2], 10);
+      const x = col * TILE_SIZE;
+      const y = row * TILE_SIZE;
+      rects.push({
+        x,
+        y,
+        w: Math.min(TILE_SIZE, viewportWidth - x),
+        h: Math.min(TILE_SIZE, viewportHeight - y),
+      });
+    }
+
+    // If no tiles specified, process full viewport
+    if (rects.length === 0) {
+      rects.push({ x: 0, y: 0, w: viewportWidth, h: viewportHeight });
+    }
+
+    return rects;
+  }
+
+  /**
+   * Convert visual groundings from perception to SceneNode records.
+   * These represent visually-detected content not present in the DOM —
+   * canvas-rendered text, visual-only controls, detected faces, etc.
+   *
+   * Contract §9: unified ID space — visual nodes join the scene graph.
+   * They are distinguished by source: ['vision'] or ['ocr'].
+   */
+  private groundingsToSceneNodes(
+    perception: PerceptionResult,
+    observationId: string,
+    documentGeneration: string,
+  ): SceneNode[] {
+    const nodes: SceneNode[] = [];
+    let visualCounter = 0;
+
+    for (const grounding of perception.groundings) {
+      const nodeId = `vis-${observationId.substring(0, 8)}-${++visualCounter}`;
+
+      // Determine source type
+      const sources = grounding.evidence.map(e => e.source);
+      const isOcr = sources.some(s => s === 'ocr');
+      const isFace = grounding.class === 'face';
+      const isControl = grounding.class === 'control' || grounding.class === 'payment-control';
+
+      const source: SceneNode['source'] = isOcr
+        ? ['ocr']
+        : isFace
+        ? ['vision']
+        : ['vision'];
+
+      // Determine sensitivity from grounding class
+      const sensitivity: SensitivityFinding[] = [];
+
+      if (isFace) {
+        sensitivity.push({
+          category: 'face',
+          confidence: grounding.confidence,
+          validationTier: 'visual',
+          evidenceSource: 'face-detector',
+        });
+      }
+
+      if (grounding.class === 'identifier') {
+        sensitivity.push({
+          category: 'account-number',
+          confidence: grounding.confidence,
+          validationTier: 'visual',
+          evidenceSource: 'ocr',
+        });
+      }
+
+      if (grounding.class === 'payment-control') {
+        sensitivity.push({
+          category: 'payment',
+          confidence: grounding.confidence,
+          validationTier: 'visual',
+          evidenceSource: 'region-parser',
+        });
+      }
+
+      // Map visual actionability
+      const actionability = grounding.actionability;
+      const affordances: SceneNode['affordances'] =
+        actionability === 'clickable' ? ['click', 'focus']
+        : actionability === 'typable' ? ['type', 'focus']
+        : actionability === 'selectable' ? ['select']
+        : [];
+
+      const node: SceneNode = {
+        id: nodeId,
+        observationId,
+        source,
+        frameId: grounding.frameId,
+        documentGeneration,
+        originClass: 'top',
+        tag: isFace ? 'canvas' : isControl ? 'canvas' : 'div',
+        role: isFace ? 'img' : isControl ? 'button' : 'generic',
+        name: grounding.semanticLabel || '',
+        description: grounding.evidence.map(e => e.finding).join('; '),
+        visibleText: isOcr ? (grounding.semanticLabel || '') : '',
+        bbox: {
+          x: grounding.bbox.x,
+          y: grounding.bbox.y,
+          w: grounding.bbox.w,
+          h: grounding.bbox.h,
+        },
+        isClipped: false,
+        zIndex: 0,
+        opacity: 1,
+        visibility: 'visible',
+        affordances,
+        isFocusable: isControl,
+        isDisabled: false,
+        isReadOnly: !isControl,
+        tabIndex: isControl ? 0 : null,
+        sensitivity,
+        necessity: 'unknown',
+        conflictFlags: grounding.conflictFlags as string[],
+        stableTargetRef: `visual-${grounding.visualRegionId}`,
+        ancestryFingerprint: `visual-${grounding.class}`,
+        mutationVersion: 0,
+        harvestedAt: new Date().toISOString(),
+      };
+
+      nodes.push(node);
+    }
+
+    return nodes;
   }
 }

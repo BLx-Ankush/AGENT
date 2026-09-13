@@ -1,0 +1,40 @@
+﻿# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Test / audit outputs
+audit-onnx-evidence.json
+scripts/test-blazeface.mts
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Temp / generated charset TS (large file, loaded at runtime from txt)
+packages/model-runner/src/ppocr-charset.ts

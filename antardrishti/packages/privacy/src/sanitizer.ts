@@ -209,14 +209,14 @@ export class Sanitizer {
     }
 
     // Check node-level sensitivity
-    for (const finding of node.sensitivity) {
+    for (const finding of (node.sensitivity ?? [])) {
       const policy = evaluatePolicy({
         sensitivity: finding,
         taskNecessity: node.necessity,
         recipient: 'remote-planner',
         origin,
         hasUserAuthorization: false,
-        ambiguity: node.conflictFlags.length > 0 ? 'high' : 'none',
+        ambiguity: (node.conflictFlags ?? []).length > 0 ? 'high' : 'none',
       });
 
       if (policy.decision === 'MASK_VISUAL' && node.bbox) {
@@ -235,17 +235,23 @@ export class Sanitizer {
     }
 
     // Build planner-visible node (no raw values, no selectors)
-    const actionability = node.affordances.includes('click') ? 'clickable' as const
-      : node.affordances.includes('type') ? 'typable' as const
-      : node.affordances.includes('select') ? 'selectable' as const
+    const affordances = node.affordances ?? [];
+    const actionability = affordances.includes('click') ? 'clickable' as const
+      : affordances.includes('type') ? 'typable' as const
+      : affordances.includes('select') ? 'selectable' as const
       : node.visibleText ? 'readable' as const
       : 'unknown' as const;
+
+    // Only include 'value' in planner-visible output when it IS a vault token.
+    // Plaintext visible text (labels, button names) is exposed via 'name', never 'value'.
+    // This prevents the egress verifier from flagging non-sensitive values.
+    const tokenizedValue = value && value.startsWith('<SENSITIVE_') ? value : undefined;
 
     return {
       id: node.id,
       role: node.role,
       name: name || undefined,
-      value: value || undefined,
+      value: tokenizedValue,
       bbox: node.bbox ? {
         x: node.bbox.x,
         y: node.bbox.y,

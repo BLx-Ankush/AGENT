@@ -28,6 +28,64 @@ import type {
   VisualEvidence,
 } from '@antardrishti/visual-grounding';
 import { createVisualGrounding, resetVisualRegionCounter } from '@antardrishti/visual-grounding';
+import {
+  getImageData,
+  cropImageData,
+  devFallback_detectTextRegions,
+  devFallback_recognizeTextFromRegions,
+  devFallback_detectFacesFromImage,
+  devFallback_parseSemanticRegionsFromImage,
+} from './browser-adapters';
+import type {
+  OnnxTextDetectorSession,
+  OnnxOcrSession,
+  OnnxFaceDetectorSession,
+  OnnxRegionParserSession,
+} from './onnx-adapters';
+
+// ── Fail-Closed Error ─────────────────────────────────────────
+
+/**
+ * Thrown when an ONNX model fails in production mode.
+ * Callers MUST catch this and abort the pipeline — no network
+ * transmission is permitted after a PerceptionFailureError.
+ *
+ * DEV_FALLBACK is only available when devFallbackEnabled is set
+ * via PerceptionPipeline.setDevFallback(true). It must NEVER
+ * activate silently in production.
+ */
+export class PerceptionFailureError extends Error {
+  constructor(
+    public readonly stage: 'text-detection' | 'ocr' | 'face-detection' | 'region-parsing',
+    public readonly cause: unknown,
+  ) {
+    super(
+      `[PerceptionPipeline] FAIL-CLOSED: ${stage} failed. ` +
+      `No network transmission permitted. ` +
+      `Enable devFallbackEnabled for offline testing only. ` +
+      `Cause: ${cause}`,
+    );
+    this.name = 'PerceptionFailureError';
+  }
+}
+
+// ── Perception context — DOM/canvas data fed from content script ──
+
+/** Canvas-rendered content extracted by the content script */
+export interface CanvasRegionData {
+  /** Text drawn on the canvas */
+  canvasTexts: Array<{ text: string; bbox: [number, number, number, number] }>;
+  /** Known face/avatar regions (from DOM canvas analysis) */
+  faceRegions: Array<{ bbox: [number, number, number, number]; confidence: number }>;
+  /** Known control regions (e.g., Pay Now button canvas) */
+  controlRegions: Array<{
+    bbox: [number, number, number, number];
+    class: string;
+    label: string;
+    confidence: number;
+    evidence: string;
+  }>;
+}
 
 // ── Pipeline result ──────────────────────────────────────────
 
@@ -73,6 +131,13 @@ export type PerceptionTrigger =
 // ── Perception Pipeline ──────────────────────────────────────
 
 export class PerceptionPipeline {
+  // ONNX model sessions (production path)
+  private onnxTextDetector: OnnxTextDetectorSession | null = null;
+  private onnxOcrRecognizer: OnnxOcrSession | null = null;
+  private onnxFaceDetector: OnnxFaceDetectorSession | null = null;
+  private onnxRegionParser: OnnxRegionParserSession | null = null;
+
+  // Legacy InferenceSession slots (kept for interface compatibility)
   private textDetector: InferenceSession | null = null;
   private ocrRecognizer: InferenceSession | null = null;
   private faceDetector: InferenceSession | null = null;
@@ -80,6 +145,64 @@ export class PerceptionPipeline {
   private groundingModel: InferenceSession | null = null;
 
   private _initialized = false;
+
+  /**
+   * DEV_FALLBACK gate.
+   *
+   * When FALSE (production default): ONNX failure → PerceptionFailureError.
+   *   The entire pipeline aborts. No sanitization or network call is made.
+   *
+   * When TRUE (test/dev only): ONNX failure → DEV_FALLBACK heuristic.
+   *   Must be explicitly enabled. Must NEVER be set in production code paths.
+   *
+   * Set via: pipeline.setDevFallback(true)
+   */
+  private devFallbackEnabled = false;
+
+  /**
+   * Enable DEV_FALLBACK for offline testing/development.
+   * MUST NOT be called in production code paths.
+   * When disabled (default), ONNX failure = pipeline abort.
+   */
+  setDevFallback(enabled: boolean): void {
+    this.devFallbackEnabled = enabled;
+    if (enabled) {
+      console.warn(
+        '[PerceptionPipeline] DEV_FALLBACK ENABLED. ' +
+        'ONNX failures will fall through to heuristics. ' +
+        'This MUST NOT be active in production.',
+      );
+    } else {
+      console.log('[PerceptionPipeline] PRODUCTION MODE: ONNX failure = fail closed.');
+    }
+  }
+
+  get isDevFallbackEnabled(): boolean {
+    return this.devFallbackEnabled;
+  }
+
+  /**
+   * Register production ONNX sessions (from model-manifests loadProductionModels).
+   * When registered, these take priority over DEV_FALLBACK adapters.
+   */
+  registerOnnxModels(models: {
+    textDetector: OnnxTextDetectorSession;
+    ocrRecognizer: OnnxOcrSession;
+    faceDetector: OnnxFaceDetectorSession;
+    regionParser: OnnxRegionParserSession;
+  }): void {
+    this.onnxTextDetector = models.textDetector;
+    this.onnxOcrRecognizer = models.ocrRecognizer;
+    this.onnxFaceDetector = models.faceDetector;
+    this.onnxRegionParser = models.regionParser;
+    this._initialized = true;
+    console.log('[Perception] PRODUCTION ONNX models registered:', {
+      textDetector: models.textDetector.manifest.id,
+      ocrRecognizer: models.ocrRecognizer.manifest.id,
+      faceDetector: models.faceDetector.manifest.id,
+      regionParser: models.regionParser.manifest.id,
+    });
+  }
 
   /**
    * Register inference sessions for each detection stage.
@@ -117,30 +240,45 @@ export class PerceptionPipeline {
     observationId: string,
     frameId: number,
     documentGeneration: string,
+    canvasContext?: CanvasRegionData,
   ): Promise<PerceptionResult> {
     const startTime = performance.now();
     resetVisualRegionCounter();
     const allMetrics: InferenceMetrics[] = [];
 
+    console.log('[Perception] ── Pipeline start ──', {
+      observationId: observationId.substring(0, 16),
+      tiles: changedTileRects.length,
+      canvasTexts: canvasContext?.canvasTexts.length ?? 0,
+      faceHints: canvasContext?.faceRegions.length ?? 0,
+      controlHints: canvasContext?.controlRegions.length ?? 0,
+    });
+
+    const t0 = performance.now();
+
     // 1. Text detection on changed tiles
     const textRegions = await this.detectTextRegions(
       imageData, changedTileRects, allMetrics,
     );
+    console.log('[Perception] [1/5] Text regions:', textRegions.length, `(${Math.round(performance.now() - t0)}ms)`);
 
-    // 2. OCR on detected text regions
+    // 2. OCR on detected text regions (+ canvas-extracted texts)
     const ocrResults = await this.recognizeText(
-      imageData, textRegions, allMetrics,
+      imageData, textRegions, allMetrics, canvasContext?.canvasTexts,
     );
+    console.log('[Perception] [2/5] OCR results:', ocrResults.length);
 
-    // 3. Face detection on changed tiles
+    // 3. Face detection on changed tiles (+ known face regions)
     const faceDetections = await this.detectFaces(
-      imageData, changedTileRects, allMetrics,
+      imageData, changedTileRects, allMetrics, canvasContext?.faceRegions,
     );
+    console.log('[Perception] [3/5] Face detections:', faceDetections.length);
 
     // 4. Semantic region parsing (UI elements, controls)
     const semanticRegions = await this.parseRegions(
-      imageData, changedTileRects, allMetrics,
+      imageData, changedTileRects, allMetrics, canvasContext?.controlRegions,
     );
+    console.log('[Perception] [4/5] Semantic regions:', semanticRegions.length);
 
     // 5. Build visual grounding records
     const groundings = this.buildGroundings(
@@ -152,8 +290,18 @@ export class PerceptionPipeline {
       frameId,
       documentGeneration,
     );
+    console.log('[Perception] [5/5] Visual groundings:', groundings.length);
 
     const totalMs = performance.now() - startTime;
+
+    console.log('[Perception] ── Pipeline done ──', {
+      totalMs: Math.round(totalMs),
+      modelsInvoked: allMetrics.map(m => m.modelId).join(', '),
+      textRegions: textRegions.length,
+      ocrRegions: ocrResults.length,
+      faceDetections: faceDetections.length,
+      groundedTargets: groundings.filter(g => g.candidateTargetId !== null).length,
+    });
 
     return {
       observationId,
@@ -170,47 +318,320 @@ export class PerceptionPipeline {
     };
   }
 
-  // ── Detection stages (stubs until models are loaded) ───────
+  // ── Detection stages ────────────────────────────────────────
+  //
+  // PRODUCTION (default): ONNX failure → throw PerceptionFailureError.
+  //   The error propagates through run() to the coordinator, which
+  //   aborts before sanitization and planner call. No PII risk.
+  //
+  // DEV_FALLBACK (explicit only): requires setDevFallback(true).
+  //   Safe only for offline testing with no real user PII.
 
   private async detectTextRegions(
-    _imageData: ImageData | OffscreenCanvas,
-    _tiles: Array<{ x: number; y: number; w: number; h: number }>,
-    _metrics: InferenceMetrics[],
+    imageData: ImageData | OffscreenCanvas,
+    tiles: Array<{ x: number; y: number; w: number; h: number }>,
+    metrics: InferenceMetrics[],
   ): Promise<TextRegion[]> {
-    if (!this.textDetector?.isInitialized) return [];
-    // TODO: Phase 3 full integration — run text detector on tiles
-    // Pre-process tile crops → run model → post-process detections
-    return [];
+    const imgData = getImageData(imageData);
+
+    // PRODUCTION: PP-OCRv4 DBNet via ONNX Runtime Web
+    if (this.onnxTextDetector?.isInitialized) {
+      try {
+        const t0 = performance.now();
+        const regions = await this.onnxTextDetector.detectRegions(imgData);
+        metrics.push({
+          modelId: this.onnxTextDetector.manifest.id,
+          backend: this.onnxTextDetector.backend,
+          modelSizeBytes: this.onnxTextDetector.manifest.sizeBytes,
+          initTimeMs: 0,
+          isCold: false,
+          inferenceMs: performance.now() - t0,
+          preprocessMs: 0,
+          postprocessMs: 0,
+          totalMs: performance.now() - t0,
+          processedPixels: imgData.width * imgData.height,
+          timestamp: new Date().toISOString(),
+        });
+        console.log(`[Perception] [ONNX] text-detector: ${regions.length} regions`);
+        return regions;
+      } catch (e) {
+        // FAIL-CLOSED: re-throw as PerceptionFailureError unless dev fallback is explicitly enabled
+        if (!this.devFallbackEnabled) {
+          throw new PerceptionFailureError('text-detection', e);
+        }
+        console.warn('[DEV_FALLBACK] text-detector ONNX failed, using heuristic (devFallbackEnabled=true):', e);
+      }
+    }
+
+    // No ONNX session registered:
+    if (!this.devFallbackEnabled) {
+      throw new PerceptionFailureError(
+        'text-detection',
+        'No ONNX text-detector session registered. Load models before running pipeline.',
+      );
+    }
+
+    // DEV_FALLBACK path — only reached if devFallbackEnabled=true
+    const t0 = performance.now();
+    const regions = devFallback_detectTextRegions(imgData, tiles);
+    metrics.push({
+      modelId: 'DEV_FALLBACK_text-detector',
+      backend: 'wasm',
+      modelSizeBytes: 0,
+      initTimeMs: 0,
+      isCold: false,
+      inferenceMs: performance.now() - t0,
+      preprocessMs: 0,
+      postprocessMs: 0,
+      totalMs: performance.now() - t0,
+      processedPixels: imgData.width * imgData.height,
+      timestamp: new Date().toISOString(),
+    });
+    return regions;
   }
 
   private async recognizeText(
-    _imageData: ImageData | OffscreenCanvas,
-    _regions: TextRegion[],
-    _metrics: InferenceMetrics[],
+    imageData: ImageData | OffscreenCanvas,
+    regions: TextRegion[],
+    metrics: InferenceMetrics[],
+    canvasTexts?: Array<{ text: string; bbox: [number, number, number, number] }>,
   ): Promise<OcrResult[]> {
-    if (!this.ocrRecognizer?.isInitialized) return [];
-    // TODO: Phase 3 — crop text regions → run OCR → return text
-    return [];
+    const imgData = getImageData(imageData);
+
+    // PRODUCTION: PP-OCRv4 rec via ONNX Runtime Web
+    if (this.onnxOcrRecognizer?.isInitialized && regions.length > 0) {
+      try {
+        const t0 = performance.now();
+        const results: OcrResult[] = [];
+
+        for (const region of regions) {
+          const [rx, ry, rw, rh] = region.bbox;
+          const crop = cropImageData(imgData, rx, ry, rw, rh);
+          const result = await this.onnxOcrRecognizer.recognizeText(crop, region.bbox);
+          if (result.text.trim().length > 0) {
+            results.push(result);
+          }
+        }
+
+        // Canvas texts are always added at 0.99 confidence (direct canvas API access)
+        if (canvasTexts) {
+          for (const ct of canvasTexts) {
+            results.push({ text: ct.text, confidence: 0.99, regionBbox: ct.bbox });
+          }
+        }
+
+        metrics.push({
+          modelId: this.onnxOcrRecognizer.manifest.id,
+          backend: this.onnxOcrRecognizer.backend,
+          modelSizeBytes: this.onnxOcrRecognizer.manifest.sizeBytes,
+          initTimeMs: 0,
+          isCold: false,
+          inferenceMs: performance.now() - t0,
+          preprocessMs: 0,
+          postprocessMs: 0,
+          totalMs: performance.now() - t0,
+          processedPixels: regions.reduce((s, r) => s + r.bbox[2] * r.bbox[3], 0),
+          timestamp: new Date().toISOString(),
+        });
+        console.log(`[Perception] [ONNX] ocr-recognizer: ${results.length} results`);
+        return results;
+      } catch (e) {
+        if (!this.devFallbackEnabled) {
+          throw new PerceptionFailureError('ocr', e);
+        }
+        console.warn('[DEV_FALLBACK] ocr-recognizer ONNX failed, using heuristic (devFallbackEnabled=true):', e);
+      }
+    }
+
+    // No ONNX session OR regions.length === 0
+    if (this.onnxOcrRecognizer?.isInitialized && regions.length === 0) {
+      // No regions to process — not a failure, just empty
+      if (canvasTexts?.length) {
+        return canvasTexts.map(ct => ({ text: ct.text, confidence: 0.99, regionBbox: ct.bbox }));
+      }
+      return [];
+    }
+
+    if (!this.onnxOcrRecognizer?.isInitialized && !this.devFallbackEnabled) {
+      throw new PerceptionFailureError(
+        'ocr',
+        'No ONNX OCR session registered. Load models before running pipeline.',
+      );
+    }
+
+    // DEV_FALLBACK path
+    const t0 = performance.now();
+    const results = await devFallback_recognizeTextFromRegions(imgData, regions, canvasTexts);
+    metrics.push({
+      modelId: 'DEV_FALLBACK_ocr',
+      backend: 'wasm',
+      modelSizeBytes: 0,
+      initTimeMs: 0,
+      isCold: false,
+      inferenceMs: performance.now() - t0,
+      preprocessMs: 0,
+      postprocessMs: 0,
+      totalMs: performance.now() - t0,
+      processedPixels: regions.reduce((s, r) => s + r.bbox[2] * r.bbox[3], 0),
+      timestamp: new Date().toISOString(),
+    });
+    return results;
   }
 
   private async detectFaces(
-    _imageData: ImageData | OffscreenCanvas,
-    _tiles: Array<{ x: number; y: number; w: number; h: number }>,
-    _metrics: InferenceMetrics[],
+    imageData: ImageData | OffscreenCanvas,
+    tiles: Array<{ x: number; y: number; w: number; h: number }>,
+    metrics: InferenceMetrics[],
+    knownFaceRegions?: Array<{ bbox: [number, number, number, number]; confidence: number }>,
   ): Promise<FaceDetection[]> {
-    if (!this.faceDetector?.isInitialized) return [];
-    // TODO: Phase 3 — run face detector
-    return [];
+    const imgData = getImageData(imageData);
+
+    // PRODUCTION: BlazeFace via ONNX Runtime Web
+    if (this.onnxFaceDetector?.isInitialized) {
+      try {
+        const t0 = performance.now();
+        const detections = await this.onnxFaceDetector.detectFaces(imgData);
+
+        if (knownFaceRegions) {
+          for (const kr of knownFaceRegions) {
+            const [, , w, h] = kr.bbox;
+            const area = w * h;
+            detections.push({
+              bbox: kr.bbox,
+              confidence: kr.confidence,
+              sizeCategory: area < 1600 ? 'tiny' : area < 6400 ? 'small' : area < 25000 ? 'medium' : 'large',
+            });
+          }
+        }
+
+        metrics.push({
+          modelId: this.onnxFaceDetector.manifest.id,
+          backend: this.onnxFaceDetector.backend,
+          modelSizeBytes: this.onnxFaceDetector.manifest.sizeBytes,
+          initTimeMs: 0,
+          isCold: false,
+          inferenceMs: performance.now() - t0,
+          preprocessMs: 0,
+          postprocessMs: 0,
+          totalMs: performance.now() - t0,
+          processedPixels: imgData.width * imgData.height,
+          timestamp: new Date().toISOString(),
+        });
+        console.log(`[Perception] [ONNX] face-detector: ${detections.length} detections`);
+        return detections;
+      } catch (e) {
+        if (!this.devFallbackEnabled) {
+          throw new PerceptionFailureError('face-detection', e);
+        }
+        console.warn('[DEV_FALLBACK] face-detector ONNX failed, using heuristic (devFallbackEnabled=true):', e);
+      }
+    }
+
+    if (!this.devFallbackEnabled) {
+      throw new PerceptionFailureError(
+        'face-detection',
+        'No ONNX face-detector session registered. Load models before running pipeline.',
+      );
+    }
+
+    // DEV_FALLBACK path
+    const t0 = performance.now();
+    const detections = devFallback_detectFacesFromImage(imgData, tiles, knownFaceRegions);
+    metrics.push({
+      modelId: 'DEV_FALLBACK_face-detector',
+      backend: 'wasm',
+      modelSizeBytes: 0,
+      initTimeMs: 0,
+      isCold: false,
+      inferenceMs: performance.now() - t0,
+      preprocessMs: 0,
+      postprocessMs: 0,
+      totalMs: performance.now() - t0,
+      processedPixels: imgData.width * imgData.height,
+      timestamp: new Date().toISOString(),
+    });
+    return detections;
   }
 
   private async parseRegions(
-    _imageData: ImageData | OffscreenCanvas,
-    _tiles: Array<{ x: number; y: number; w: number; h: number }>,
-    _metrics: InferenceMetrics[],
+    imageData: ImageData | OffscreenCanvas,
+    tiles: Array<{ x: number; y: number; w: number; h: number }>,
+    metrics: InferenceMetrics[],
+    knownCanvasRegions?: Array<{
+      bbox: [number, number, number, number];
+      class: string;
+      label: string;
+      confidence: number;
+      evidence: string;
+    }>,
   ): Promise<SemanticRegion[]> {
-    if (!this.regionParser?.isInitialized) return [];
-    // TODO: Phase 3 — run region parser (OmniParser-style)
-    return [];
+    const imgData = getImageData(imageData);
+
+    // PRODUCTION: OmniParser icon_detect via ONNX Runtime Web
+    if (this.onnxRegionParser?.isInitialized) {
+      try {
+        const t0 = performance.now();
+        const regions = await this.onnxRegionParser.parseRegions(imgData);
+
+        if (knownCanvasRegions) {
+          for (const kr of knownCanvasRegions) {
+            regions.push({
+              bbox: kr.bbox,
+              class: kr.class,
+              label: kr.label,
+              confidence: kr.confidence,
+              evidence: `canvas-context: ${kr.evidence}`,
+            });
+          }
+        }
+
+        metrics.push({
+          modelId: this.onnxRegionParser.manifest.id,
+          backend: this.onnxRegionParser.backend,
+          modelSizeBytes: this.onnxRegionParser.manifest.sizeBytes,
+          initTimeMs: 0,
+          isCold: false,
+          inferenceMs: performance.now() - t0,
+          preprocessMs: 0,
+          postprocessMs: 0,
+          totalMs: performance.now() - t0,
+          processedPixels: imgData.width * imgData.height,
+          timestamp: new Date().toISOString(),
+        });
+        console.log(`[Perception] [ONNX] region-parser (OmniParser): ${regions.length} regions`);
+        return regions;
+      } catch (e) {
+        if (!this.devFallbackEnabled) {
+          throw new PerceptionFailureError('region-parsing', e);
+        }
+        console.warn('[DEV_FALLBACK] region-parser ONNX failed, using heuristic (devFallbackEnabled=true):', e);
+      }
+    }
+
+    if (!this.devFallbackEnabled) {
+      throw new PerceptionFailureError(
+        'region-parsing',
+        'No ONNX region-parser session registered. Load models before running pipeline.',
+      );
+    }
+
+    // DEV_FALLBACK path
+    const t0 = performance.now();
+    const regions = devFallback_parseSemanticRegionsFromImage(imgData, tiles, knownCanvasRegions);
+    metrics.push({
+      modelId: 'DEV_FALLBACK_region-parser',
+      backend: 'wasm',
+      modelSizeBytes: 0,
+      initTimeMs: 0,
+      isCold: false,
+      inferenceMs: performance.now() - t0,
+      preprocessMs: 0,
+      postprocessMs: 0,
+      totalMs: performance.now() - t0,
+      processedPixels: imgData.width * imgData.height,
+      timestamp: new Date().toISOString(),
+    });
+    return regions;
   }
 
   // ── Grounding builder ──────────────────────────────────────
