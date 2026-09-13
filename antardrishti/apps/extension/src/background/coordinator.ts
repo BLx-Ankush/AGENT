@@ -50,6 +50,8 @@ import {
   PerceptionPipeline,
   type PerceptionResult,
   type CanvasRegionData,
+  loadProductionModels,
+  type LoadedModels,
 } from '@antardrishti/model-runner';
 import type { SceneNode, SensitivityFinding } from '@antardrishti/scene-graph';
 
@@ -94,11 +96,92 @@ export class Coordinator {
   private planner: PlannerAdapter = new DeterministicPlanner();
   private perception = new PerceptionPipeline();
 
+  /**
+   * Readiness gate — resolves when production models are loaded and registered.
+   * All user-task handling awaits this before entering perception.
+   * If model loading fails, this rejects and the coordinator enters fail-closed state.
+   */
+  private _modelReadiness: Promise<LoadedModels>;
+  private _modelLoadFailed = false;
+  private _loadedModels: LoadedModels | null = null;
+
   // Pending confirmations
   private pendingConfirmations = new Map<
     string,
     { resolve: (approved: boolean) => void }
   >();
+
+  constructor() {
+    // Start model loading immediately — initialize() will await the readiness gate.
+    // This means model loading begins at service worker start, not at first user task.
+    this._modelReadiness = this._loadModels();
+  }
+
+  /**
+   * Load all production ONNX models and register them with the pipeline.
+   *
+   * FAIL-CLOSED contract:
+   *   - If any model fails to load, _modelLoadFailed = true.
+   *   - All subsequent handleUserTask calls will be rejected.
+   *   - DEV_FALLBACK is NOT enabled. Failure is never silent.
+   *
+   * Startup log sequence:
+   *   [ModelLoader] Starting production model load…
+   *   [ModelLoader] Loading production models { browser, backend, webgpu, wasm }
+   *   [ModelLoader] All models loaded { textDetector, ocrRecognizer, … }
+   *   [Perception]  PRODUCTION ONNX models registered
+   *   [Coordinator] ✅ Perception ready — all 4 ONNX models loaded
+   */
+  private async _loadModels(): Promise<LoadedModels> {
+    console.log('[ModelLoader] Starting production model load…');
+    try {
+      // detectRuntime() inside loadProductionModels() selects:
+      //   Chrome → WebGPU preferred, WASM fallback
+      //   Firefox → WASM-first
+      const models = await loadProductionModels();
+
+      // Register with the perception pipeline — sets _initialized = true
+      this.perception.registerOnnxModels(models);
+      this._loadedModels = models;
+
+      // Persist backend status for the popup model status panel
+      chrome.storage.local.set({
+        modelBackend: models.backend,
+        modelLoadedAt: new Date().toISOString(),
+      }).catch(() => {});
+
+      return models;
+    } catch (err) {
+      this._modelLoadFailed = true;
+      console.error(
+        '[ModelLoader] FAIL-CLOSED: Production model loading failed. ' +
+        'No user tasks will be processed until the extension is reloaded. ' +
+        'Cause:', err,
+      );
+      // Rethrow so the readiness promise rejects and handleUserTask can detect failure
+      throw err;
+    }
+  }
+
+  // ── Public readiness accessors ────────────────────────────
+
+  /** True once all 4 ONNX models are loaded and perception is initialized. */
+  get isPerceptionReady(): boolean {
+    return this.perception.isInitialized && !this._modelLoadFailed;
+  }
+
+  /** True if model loading failed (fail-closed state). */
+  get isModelLoadFailed(): boolean {
+    return this._modelLoadFailed;
+  }
+
+  /**
+   * Await this to know when production models are ready.
+   * Used by tests to verify the full initialization chain.
+   */
+  get modelReadiness(): Promise<LoadedModels> {
+    return this._modelReadiness;
+  }
 
   // ── Initialization ───────────────────────────────────────
 
@@ -111,6 +194,17 @@ export class Coordinator {
       }
     } catch {
       console.log('[Coordinator] Fresh start');
+    }
+
+    // Wait for production models to be ready (they started loading in constructor).
+    // This ensures initialize() does not return until perception is fully operational.
+    try {
+      await this._modelReadiness;
+      console.log('[Coordinator] ✅ Perception ready — all 4 ONNX models loaded');
+    } catch (err) {
+      console.error('[Coordinator] ❌ Model load failed — coordinator in fail-closed state');
+      // Do NOT re-throw — service worker lifecycle must complete.
+      // The fail-closed flag is set; handleUserTask will reject all tasks.
     }
 
     // Load planner config from storage
@@ -207,9 +301,32 @@ export class Coordinator {
     console.log('[Coordinator] ═══ Pipeline Start ═══');
     const pipelineStart = performance.now();
 
+    // ── Readiness gate ──────────────────────────────────────
+    // Ensures no user task can enter perception before all 4 ONNX models
+    // are loaded and registered. Prevents race conditions at startup.
+    if (this._modelLoadFailed) {
+      console.error('[Coordinator] FAIL-CLOSED: Model loading failed. Task rejected.');
+      sendResponse({
+        error: 'Model loading failed. Extension must be reloaded.',
+        failClosed: true,
+      });
+      return;
+    }
+    try {
+      await this._modelReadiness;
+    } catch {
+      // _modelLoadFailed is already set; the error path above will catch future calls
+      sendResponse({
+        error: 'Model loading failed. Extension must be reloaded.',
+        failClosed: true,
+      });
+      return;
+    }
+
     if (!this.state.isActive) {
       await this.startSession(payload.tabId);
     }
+
 
     try {
       // ── Step 1: Capture visible tab ─────────────────────
