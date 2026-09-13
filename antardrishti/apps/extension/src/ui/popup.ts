@@ -158,6 +158,24 @@ savePlannerConfig.addEventListener('click', async () => {
   setTimeout(() => { savePlannerConfig.textContent = 'Save Config'; }, 1500);
 });
 
+// ── Detection source badge ────────────────────────────────────
+
+/**
+ * Return an HTML badge for a detection source.
+ * Never reveals protected values — source label only.
+ */
+function _sourceBadge(source: string): string {
+  const map: Record<string, { label: string; cls: string }> = {
+    deterministic: { label: '🔵 Deterministic', cls: 'badge-det'   },
+    semantic:      { label: '🟣 Semantic',       cls: 'badge-sem'   },
+    neural:        { label: '🟠 Neural',          cls: 'badge-neural'},
+    visual:        { label: '🟢 Visual',          cls: 'badge-vis'  },
+    combined:      { label: '⚪ Combined',         cls: 'badge-comb' },
+  };
+  const entry = map[source] ?? { label: source, cls: 'badge-det' };
+  return `<span class="src-badge ${entry.cls}">${entry.label}</span>`;
+}
+
 // ── Status updates ───────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message: unknown) => {
@@ -324,29 +342,43 @@ function updateEvidence(response: any, task: string): void {
   networkStatus.className = response.networkCalls > 0 ? 'network-status network-used' : 'network-safe';
 
   // Redaction section
-  const redactions: Array<{ token: string; category: string }> = response.redactionDetails || [];
+  const redactions: Array<{
+    token: string;
+    category: string;
+    source?: string;
+    reasoning?: string;
+  }> = response.redactionDetails || [];
+
   if (response.redactions > 0 || redactions.length > 0) {
     redactionSection.style.display = 'block';
 
     if (redactions.length > 0) {
-      redactionTable.innerHTML = redactions.map(r => `
-        <div class="row">
-          <span class="col-id token-id">${r.token}</span>
-          <span class="col">${r.category}</span>
-          <span class="col-status tokenized">Tokenized ✓</span>
-        </div>
-      `).join('');
+      redactionTable.innerHTML = redactions.map(r => {
+        const src    = r.source ?? 'deterministic';
+        const badge  = _sourceBadge(src);
+        const tip    = r.reasoning ? ` title="${r.reasoning.replace(/"/g, '&quot;')}"` : '';
+        const action = src === 'visual' ? 'Redacted ✓' : 'Tokenized ✓';
+        return `
+          <div class="row">
+            <span class="col-id token-id">${r.token}</span>
+            <span class="col">${r.category}</span>
+            <span class="col-source"${tip}>${badge}</span>
+            <span class="col-status tokenized">${action}</span>
+          </div>`;
+      }).join('');
     } else {
       redactionTable.innerHTML = `
         <div class="row">
           <span class="col-id">Count</span>
           <span class="col">${response.redactions} redaction(s)</span>
+          <span class="col-source"></span>
           <span class="col-status tokenized">Tokenized ✓</span>
         </div>
       `;
     }
     redactionNote.textContent = '→ The planner knows field categories only. Raw values stay local.';
   }
+
 
   // Planner section
   if (response.planId) {

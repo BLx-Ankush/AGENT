@@ -27,6 +27,14 @@ import type {
 import { scanForPii, type PiiDetection } from '@antardrishti/pii-rules';
 import { TokenVault } from './token-vault';
 import { evaluatePolicy, type PolicyDecision } from './policy';
+import {
+  ContextSensitivityDetector,
+  fuse,
+  type SemanticDetection,
+} from '@antardrishti/semantic-sensitivity';
+
+// Singleton context scorer — stateless, safe to share across sanitize() calls
+const _ctxDetector = new ContextSensitivityDetector();
 
 // ── Sanitization result ──────────────────────────────────────
 
@@ -120,21 +128,39 @@ export class Sanitizer {
     frameId: number,
     documentGeneration: string,
     origin: string,
+    hints?: { label?: string; fieldName?: string; inputType?: string; fromOcr?: boolean },
   ): string {
-    const detections = scanForPii(text);
-    if (detections.length === 0) return text;
+    // ── Layer 1: deterministic PII rules ─────────────────────
+    const deterministicDetections = scanForPii(text);
+
+    // ── Layer 2: semantic context-window scorer ───────────────
+    // Run on text spans NOT already covered by high-confidence deterministic matches
+    const semanticDetections: SemanticDetection[] = _ctxDetector.detect(text, hints);
+
+    // ── Layer 3: conservative fusion ─────────────────────────
+    const fused = fuse(deterministicDetections, semanticDetections);
+
+    if (fused.length === 0) return text;
 
     let sanitized = text;
     // Process in reverse order to maintain offsets
-    const sorted = [...detections].sort((a, b) => b.startOffset - a.startOffset);
+    const sorted = [...fused].sort(
+      (a, b) => (b.span?.start ?? 0) - (a.span?.start ?? 0),
+    );
 
-    for (const detection of sorted) {
+    for (const decision of sorted) {
+      if (!decision.sensitive || decision.policyDecision === 'allow') continue;
+      if (!decision.span) continue;
+
+      // Map SensitivityDecision → SensitivityFinding for policy engine
       const policy = evaluatePolicy({
         sensitivity: {
-          category: detection.category,
-          confidence: detection.confidence,
-          validationTier: detection.validationTier,
-          evidenceSource: detection.rule,
+          category: decision.subtype ?? decision.category,
+          confidence: decision.confidence,
+          validationTier: decision.source === 'deterministic'
+            ? 'pattern-matched'
+            : 'context-inferred',
+          evidenceSource: decision.detectorIds.join(','),
         },
         taskNecessity: 'unknown',
         recipient: 'remote-planner',
@@ -145,31 +171,37 @@ export class Sanitizer {
 
       if (policy.decision === 'ALLOW_LITERAL') continue;
 
+      const rawValue = sanitized.slice(decision.span.start, decision.span.end);
+
+      // Use tokenPrefix from taxonomy for semantic detections;
+      // deterministic detections use their category directly
+      const vaultCategory = decision.source === 'deterministic'
+        ? (decision.subtype ?? decision.category)
+        : decision.category.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
       // Store value in vault and get token
       const { token } = this.vault.storeValue(
-        detection.matchedText,
-        detection.category,
+        rawValue,
+        vaultCategory,
         sessionId, tabId, frameId,
         documentGeneration, origin,
-        `${context}:${detection.startOffset}`,
+        `${context}:${decision.span.start}`,
         'type',
       );
 
       // Replace in text
       sanitized =
-        sanitized.substring(0, detection.startOffset) +
+        sanitized.substring(0, decision.span.start) +
         token +
-        sanitized.substring(detection.endOffset);
+        sanitized.substring(decision.span.end);
 
       // Create redaction declaration
       redactions.push({
         token: token as string,
-        category: mapToRedactionCategory(detection.category),
-        shape: mapToRedactionShape(detection.category),
-        region: `${context}:${detection.startOffset}`,
-        representation: policy.decision === 'TOKENIZE' ? 'placeholder'
-          : policy.decision === 'ABSTRACT' ? 'abstracted'
-          : policy.decision === 'OMIT' ? 'omitted' : 'masked',
+        category: mapToRedactionCategory(decision.subtype ?? decision.category),
+        shape: mapToRedactionShape(decision.subtype ?? decision.category),
+        region: `${context}:${decision.span.start}`,
+        representation: 'placeholder',
         disclosure: 'shape-only',
         reasonCode: 'required-for-planning',
       });

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-09-13T08:06:10.204Z",
+    "timestamp": "2026-09-13T11:41:28.454Z",
     "fixture": "apps/demo-page/index.html",
     "backend": "onnxruntime-node/cpu",
     "nodeVersion": "v24.11.0",
@@ -10,11 +10,11 @@
   },
   "piiEval": {
     "TP": 12,
-    "FP": 2,
+    "FP": 0,
     "FN": 0,
-    "precision": 0.8571428571428571,
+    "precision": 1,
     "recall": 1,
-    "f1": 0.923076923076923,
+    "f1": 1,
     "byCategory": {
       "email": {
         "tp": 1,
@@ -23,7 +23,7 @@
       },
       "phone": {
         "tp": 1,
-        "fp": 2,
+        "fp": 0,
         "fn": 0
       },
       "pan": {
@@ -78,7 +78,7 @@
       }
     },
     "gtCount": 12,
-    "detectedCount": 14,
+    "detectedCount": 12,
     "visualOnlyGt": 1,
     "note": "GT-PII-09 (canvas account number) requires OCR -- excluded from DOM precision/recall"
   },
@@ -86,12 +86,12 @@
     "textDetector": {
       "pixelsAbove03": 3220,
       "textRatio": "0.0079",
-      "latencyMs": 167
+      "latencyMs": 173
     },
     "regionParser": {
       "uiDetections": 24,
       "maxConf": "0.878",
-      "latencyMs": 87
+      "latencyMs": 77
     },
     "faceDetector": {
       "N": 0,
@@ -101,7 +101,7 @@
         16
       ],
       "box": null,
-      "latencyMs": 6
+      "latencyMs": 5
     },
     "gtRegions": 8,
     "detectedRegions": 6,
@@ -117,7 +117,7 @@
     "adversarialLeakPixels": 0,
     "plannedRegions": 5,
     "gtRegions": 5,
-    "latencyMs": 6
+    "latencyMs": 4
   },
   "latencyEval": {
     "configs": [
@@ -131,19 +131,19 @@
             "meanMs": "0.00"
           },
           "harvest": {
-            "p50ms": "0.21",
-            "p95ms": "0.60",
-            "meanMs": "0.26"
+            "p50ms": "0.31",
+            "p95ms": "1.37",
+            "meanMs": "0.45"
           },
           "forbidden": {
             "p50ms": "0.01",
-            "p95ms": "0.02",
-            "meanMs": "0.04"
+            "p95ms": "0.03",
+            "meanMs": "0.01"
           },
           "total": {
-            "p50ms": "0.22",
-            "p95ms": "1.13",
-            "meanMs": "0.30"
+            "p50ms": "0.32",
+            "p95ms": "1.41",
+            "meanMs": "0.47"
           }
         }
       },
@@ -163,10 +163,10 @@
   },
   "resourceEval": {
     "loadTimes": {
-      "text-detector": 155,
-      "ocr-recognizer": 226,
-      "face-detector": 31,
-      "ui-region-detector": 131
+      "text-detector": 222,
+      "ocr-recognizer": 352,
+      "face-detector": 39,
+      "ui-region-detector": 137
     },
     "modelSizesMB": {
       "text-detector": "4.75",
@@ -175,10 +175,10 @@
       "ui-region-detector": "12.14"
     },
     "totalModelSizeMB": "28.24",
-    "heapBeforeMB": "13.8",
-    "heapAfterMB": "13.9",
+    "heapBeforeMB": "11.8",
+    "heapAfterMB": "12.0",
     "heapDeltaMB": "0.1",
-    "rssMB": "212.7",
+    "rssMB": "184.9",
     "gpu": "N/A -- CPU backend",
     "inferenceCountPerRun": 4,
     "estimatedCaptureBytes": {
@@ -188,13 +188,13 @@
     }
   },
   "payloadEval": {
-    "payloadSizeChars": 1197,
+    "payloadSizeChars": 1059,
     "egressVerdict": "APPROVED",
     "leaks": [],
     "leakCount": 0,
-    "opaqueTokens": 14,
+    "opaqueTokens": 12,
     "pass": true,
-    "piiDetected": 14,
+    "piiDetected": 12,
     "vaultTokensStored": 0,
     "probeResults": [
       {
