@@ -60,15 +60,15 @@ export class CaptureManager {
     const origin = new URL(tab.url).origin;
     const now = new Date().toISOString();
 
-    // Capture — requires activeTab permission
+    // Capture - requires activeTab permission
     const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: 'png',
     });
 
-    // Parse PNG header for dimensions (service worker has no Image/DOM)
-    const { width, height } = this.parsePngDimensions(imageDataUrl);
+    // Decode PNG → ImageBitmap → OffscreenCanvas (available in Chrome MV3 SW 109+)
+    const { bitmap, width, height } = await this.decodeImageDataUrl(imageDataUrl);
 
-    // Build capture stamp
+    // Build capture stamp (stamp hash is metadata-only, NOT used for tile content)
     const stampFields = {
       tabId,
       frameTreeGeneration: `ftg-${Date.now()}`,
@@ -86,15 +86,13 @@ export class CaptureManager {
     const hash = await computeCaptureHash(stampFields);
     const stamp: CaptureStamp = { ...stampFields, hash };
 
-    // Generate tile grid and compute hashes
+    // Tile grid + per-tile pixel content hashes
     const observationId = createObservationId();
     const tiles = this.generateTileGrid(width, height);
-    const tileHashes = new Map<string, string>();
 
-    for (const tile of tiles) {
-      // Phase 1: position-based hash. Phase 3: pixel-content hash via OffscreenCanvas.
-      tileHashes.set(tile.id, `${tile.id}-${hash.substring(0, 8)}`);
-    }
+    // Hash each tile’s pixel content independently
+    const tileHashes = await this.computeTileHashes(bitmap, tiles, width, height);
+    bitmap.close();
 
     const changedTileIds = this.detectChangedTiles(tileHashes);
 
@@ -133,6 +131,74 @@ export class CaptureManager {
       }
     }
     return tiles;
+  }
+
+  /**
+   * Compute per-tile pixel content hashes via OffscreenCanvas.
+   *
+   * Each tile's RGBA pixel bytes are hashed independently with SHA-256
+   * (truncated to 16 hex chars for cache efficiency).
+   *
+   * This is the fix for the "all tiles always changed" bug where the
+   * old implementation used `tileId + globalCaptureHash` as the tile
+   * content hash — meaning every tile appeared changed whenever any
+   * pixel on the screen changed.
+   */
+  private async computeTileHashes(
+    bitmap: ImageBitmap,
+    tiles: TileInfo[],
+    _viewportWidth: number,
+    _viewportHeight: number,
+  ): Promise<Map<string, string>> {
+    const hashes = new Map<string, string>();
+
+    // Single shared OffscreenCanvas, resized per tile to avoid allocations
+    const canvas = new OffscreenCanvas(TILE_SIZE, TILE_SIZE);
+    const ctx = canvas.getContext('2d')!;
+
+    for (const tile of tiles) {
+      // Clear + draw only the tile's region
+      ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+      ctx.drawImage(
+        bitmap,
+        tile.x, tile.y,              // source x, y
+        tile.width, tile.height,      // source w, h
+        0, 0,                          // dest x, y
+        tile.width, tile.height,      // dest w, h
+      );
+
+      const pixelData = ctx.getImageData(0, 0, tile.width, tile.height);
+
+      // SHA-256 of raw RGBA bytes — crypto.subtle is available in Chrome SW
+      const hashBuffer = await crypto.subtle.digest('SHA-256', pixelData.data.buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      // 16 hex chars (64-bit) — sufficient for change detection, minimal memory
+      const hex = hashArray.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+      hashes.set(tile.id, hex);
+    }
+
+    return hashes;
+  }
+
+  /**
+   * Decode a PNG data URL to an ImageBitmap + dimensions.
+   * Uses createImageBitmap (available in Chrome MV3 service workers).
+   */
+  private async decodeImageDataUrl(
+    dataUrl: string,
+  ): Promise<{ bitmap: ImageBitmap; width: number; height: number }> {
+    // Fast dimension parse from PNG IHDR (no image decode needed)
+    const { width, height } = this.parsePngDimensions(dataUrl);
+
+    // Decode PNG → ImageBitmap (GPU-accelerated in Chrome)
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'image/png' });
+    const bitmap = await createImageBitmap(blob);
+
+    return { bitmap, width: bitmap.width || width, height: bitmap.height || height };
   }
 
   /** Detect tiles that changed since the last capture. */
