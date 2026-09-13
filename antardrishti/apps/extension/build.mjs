@@ -90,10 +90,10 @@ async function build() {
     copyFileSync(cssPath, join(distDir, 'popup.css'));
   }
 
-  // 5b. Copy ORT smoke test page (dev/validation tool)
-  const smokeTestSrc = join(__dirname, 'ort-smoke-test.html');
-  if (existsSync(smokeTestSrc)) {
-    copyFileSync(smokeTestSrc, join(distDir, 'ort-smoke-test.html'));
+  // 5b. Copy ORT smoke test page + external script + CSS (CSP-compliant — no inline JS)
+  for (const f of ['ort-smoke-test.html', 'ort-smoke-test.js', 'ort-smoke-test.css']) {
+    const src = join(__dirname, f);
+    if (existsSync(src)) copyFileSync(src, join(distDir, f));
   }
 
   // 6. Copy ONNX model assets → dist/{target}/models/
