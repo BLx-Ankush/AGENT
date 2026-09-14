@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ANTARDRISHTI -- Offscreen Inference Runtime
  *
  * Chrome MV3 Offscreen Document entry point.
@@ -47,7 +47,7 @@ import {
   disposeModels,
   PerceptionPipeline,
 } from '@antardrishti/model-runner';
-import type { LoadedModels } from '@antardrishti/model-runner';
+import type { LoadedModels, BackendRequest } from '@antardrishti/model-runner';
 
 // -- Runtime instance ID ---------------------------------------------------
 // Unique per document load. Allows the SW to detect stale documents.
@@ -155,10 +155,11 @@ async function initInference(requestedBackend: string): Promise<void> {
   console.log('[InferenceRuntime] context=offscreen');
   console.log('[InferenceRuntime] requestedBackend=' + requestedBackend);
 
-  // Offscreen documents support Workers + dynamic import() fully.
-  // loadProductionModels() reads chrome.storage.local backend override,
-  // detects GPU capability, and loads all 4 ORT InferenceSession instances.
-  const models = await loadProductionModels();
+  // Pass requestedBackend explicitly -- do NOT read chrome.storage.local here.
+  // The service worker is the authority and has already resolved the backend
+  // preference. chrome.storage.local is not reliably accessible from the
+  // offscreen document context (confirmed: returns undefined in live Chrome).
+  const models = await loadProductionModels(requestedBackend as BackendRequest);
 
   _backend = models.backend;
   console.log('[InferenceRuntime] selectedBackend=' + _backend);

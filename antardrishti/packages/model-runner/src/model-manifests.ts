@@ -118,7 +118,7 @@ import {
 } from './onnx-adapters';
 import { detectRuntime, readBackendOverride } from './runtime';
 
-import type { InferenceMetrics } from './types';
+import type { InferenceMetrics, BackendRequest } from './types';
 
 export interface LoadedModels {
   textDetector: OnnxTextDetectorSession;
@@ -139,12 +139,17 @@ export interface LoadedModels {
  * Returns LoadedModels with all sessions initialized and ready.
  * Call pipeline.registerModels(loaded) to activate production path.
  */
-export async function loadProductionModels(): Promise<LoadedModels> {
-  // Read backend override from chrome.storage.local before hardware detection.
-  // Set with: chrome.storage.local.set({ antardrishti_backend: 'wasm' })
-  // Revert:   chrome.storage.local.remove('antardrishti_backend')
-  const requestedBackend = await readBackendOverride();
-  const runtime = await detectRuntime(requestedBackend);
+export async function loadProductionModels(
+  requestedBackend?: BackendRequest,
+): Promise<LoadedModels> {
+  // When requestedBackend is supplied explicitly (e.g. from the offscreen
+  // document, which receives the value from the service worker via
+  // INFERENCE_INIT), use it directly without touching chrome.storage.local.
+  //
+  // When omitted (Firefox direct path, Node tests), fall back to
+  // readBackendOverride() so existing behavior is fully preserved.
+  const backendRequest = requestedBackend ?? await readBackendOverride();
+  const runtime = await detectRuntime(backendRequest);
   const backend = runtime.selectedBackend;
 
   console.log('[ModelLoader] Loading production models', {
