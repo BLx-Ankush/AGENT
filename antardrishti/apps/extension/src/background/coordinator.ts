@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ANTARDRISHTI — Session Coordinator (Production-Ready Full Pipeline)
  *
  * Orchestrates the complete production flow:
@@ -1450,12 +1450,23 @@ export class Coordinator {
    * SMOKE_OFFSCREEN_TEST handler.
    *
    * Proves S1-S6 offscreen ONNX inference chain:
-   *   S1 offscreen document created
-   *   S2 ORT initialized in offscreen context
-   *   S3 backend selected
+   *   S1 offscreen document created/exists
+   *   S2 OFFSCREEN_READY received (uses Coordinator's buffered state)
+   *   S3 ORT initialized (INFERENCE_INIT_RESULT.success)
    *   S4 real model session (face-detector)
-   *   S5 real inference on 64x64 blank PNG
+   *   S5 real inference on 64×64 blank PNG
    *   S6 result returned to service worker
+   *
+   * IMPORTANT: This reuses the Coordinator's existing _initOffscreenInference()
+   * path rather than duplicating the OFFSCREEN_READY handshake. The production
+   * flow already owns _offscreenReadyReceived, PING, READY buffering, and the
+   * INFERENCE_INIT round-trip. The smoke test just confirms that state and
+   * then executes a real inference.
+   *
+   * If the production init already completed, _initOffscreenInference() returns
+   * immediately (mutex singleton). If not, it runs the full handshake.
+   *
+   * A smoke test failure must NOT set _modelLoadFailed = true.
    *
    * Called by ort-smoke-test.js.
    */
@@ -1469,40 +1480,37 @@ export class Coordinator {
       let initMs = 0;
       try {
         // --- S1: Ensure offscreen document ---
+        // _initOffscreenInference() internally calls _ensureOffscreenDocument().
+        // We call _ensureOffscreenDocument() first just to report whether it
+        // already existed (for S1 display), then let _initOffscreenInference()
+        // handle the full handshake.
         const existed = await this._ensureOffscreenDocument();
         offscreenCreated = true;
         console.log('[Coordinator] SMOKE S1: offscreen document ready (existed=' + existed + ')');
 
-        // --- S2: Wait for OFFSCREEN_READY ---
-        // If document already existed, ping it so it re-sends READY.
-        if (existed) {
-          chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
-        }
-        await new Promise<void>((resolve, reject) => {
-          const prev = this._offscreenReadyResolve;
-          this._offscreenReadyResolve = () => {
-            // Capture runtimeInstanceId from OFFSCREEN_READY message
-            offscreenReadyReceived = true;
-            resolve();
-          };
-          this._offscreenReadyReject = reject;
-          setTimeout(() => {
-            if (this._offscreenReadyResolve) {
-              this._offscreenReadyResolve = null;
-              this._offscreenReadyReject = null;
-              reject(new Error('Smoke S2 timeout: OFFSCREEN_READY not received in 10s'));
-            }
-          }, 10000);
-        });
-        console.log('[Coordinator] SMOKE S2: OFFSCREEN_READY received');
+        // --- S2 + S3: Use the production handshake (buffered READY + INFERENCE_INIT) ---
+        // _initOffscreenInference() is mutex-protected:
+        //   - If already completed: returns immediately (0ms).
+        //   - If in progress: awaits the existing promise.
+        //   - If not started: runs full handshake (READY wait + INFERENCE_INIT).
+        //
+        // The production _waitForOffscreenReady() checks _offscreenReadyReceived
+        // first, resolving instantly if READY was already buffered. This eliminates
+        // the race that caused the smoke S2 timeout.
+        const initT0 = performance.now();
+        await this._initOffscreenInference();
+        initMs = Math.round(performance.now() - initT0);
 
-        // --- S3: Send INFERENCE_INIT, await INFERENCE_INIT_RESULT ---
-        const t0 = performance.now();
-        await this._sendInferenceInit();
-        initMs = Math.round(performance.now() - t0);
+        // S2: OFFSCREEN_READY was received (production state is authoritative)
+        offscreenReadyReceived = this._offscreenReadyReceived;
+        runtimeInstanceId = this._offscreenRuntimeInstanceId ?? 'unknown';
+        console.log('[Coordinator] SMOKE S2: OFFSCREEN_READY received (instance=' +
+          runtimeInstanceId + ', buffered=' + offscreenReadyReceived + ')');
+
+        // S3: ORT initialized (INFERENCE_INIT_RESULT.success was true)
         console.log('[Coordinator] SMOKE S3: ORT initialized in ' + initMs + 'ms backend=' + this._backend);
 
-        // --- S4+S5: Send INFERENCE_RUN with 64x64 blank PNG ---
+        // --- S4+S5: Send INFERENCE_RUN with 64×64 blank PNG ---
         const canvas = new OffscreenCanvas(64, 64);
         const ctx = canvas.getContext('2d')!;
         ctx.fillStyle = '#000';
@@ -1550,15 +1558,17 @@ export class Coordinator {
           backend: this._backend,
           modelId: 'face-detector-v1',
           initMs,
-          transferDecodeMs: 0,
-          inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? 0,
-          totalMs: initMs,
+          transferDecodeMs: inferenceResult?.transferDecodeMs ?? 0,
+          inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? inferenceResult?.inferenceMs ?? 0,
+          totalMs: inferenceResult?.totalMs ?? initMs,
           faceDetections: inferenceResult?.faceDetections?.length ?? 0,
           timing: { initMs },
         });
       } catch (e) {
         const err = e as Error;
         console.error('[Coordinator] SMOKE_OFFSCREEN_TEST failed:', err.message);
+        // IMPORTANT: Do NOT set _modelLoadFailed here. The smoke test is a
+        // diagnostic -- its failure should not prevent production inference.
         sendResponse({
           success: false,
           error: err.message,
@@ -1569,3 +1579,4 @@ export class Coordinator {
     })();
   }
 }
+
