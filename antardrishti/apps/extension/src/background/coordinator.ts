@@ -384,13 +384,24 @@ export class Coordinator {
     }
   }
 
-  // ── Message handling ─────────────────────────────────────
+  // -- Message handling ----------------------------------------------------
 
   handleMessage(
     message: unknown,
     sender: chrome.runtime.MessageSender,
     sendResponse: (response: unknown) => void,
   ): void {
+    // STEP 1: Internal offscreen messages MUST be routed FIRST.
+    // OFFSCREEN_READY, INFERENCE_INIT_RESULT, INFERENCE_RESULT, INFERENCE_ERROR
+    // are NOT protocol-v2 MessageEnvelopes. Checking isValidMessageEnvelope()
+    // before this gate rejects them silently, causing OFFSCREEN_READY timeout.
+    if (isOffscreenToSwMessage(message)) {
+      this._handleOffscreenMessage(message);
+      sendResponse({ ack: true });
+      return;
+    }
+
+    // STEP 2: All other messages must be valid protocol-v2 envelopes.
     if (!isValidMessageEnvelope(message)) {
       sendResponse({ error: 'Invalid message envelope' });
       return;
@@ -398,15 +409,7 @@ export class Coordinator {
 
     const msg = message as MessageEnvelope;
 
-    // ── Offscreen → SW messages ───────────────────────────────────────────
-    // Route INFERENCE_* results from the offscreen document before the
-    // standard protocol-v2 envelope check.
-    if (isOffscreenToSwMessage(message)) {
-      this._handleOffscreenMessage(message);
-      sendResponse({ ack: true });
-      return;
-    }
-
+    // STEP 3: Dispatch by protocol-v2 message type.
     switch (msg.type) {
       case MESSAGE_TYPES.USER_TASK:
         this.handleUserTask(msg.payload as UserTaskPayload, sendResponse);
@@ -445,10 +448,8 @@ export class Coordinator {
         sendResponse({ ack: true });
         break;
 
-
       case 'SMOKE_OFFSCREEN_TEST': {
-        // Phase 9 smoke test: prove S1-S6 offscreen ONNX inference.
-        // Creates offscreen doc, runs real face-detector inference, returns timing.
+        // Phase 9 smoke test: S1-S6 offscreen ONNX inference proof.
         this.handleSmokeOffscreenTest(sendResponse);
         break;
       }
