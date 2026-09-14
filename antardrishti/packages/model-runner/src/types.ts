@@ -18,10 +18,16 @@
 
 export type InferenceBackend = 'webgpu' | 'wasm' | 'cpu' | 'unknown';
 
+/** Backend preference: explicit request before hardware detection is applied. */
+export type BackendRequest = 'wasm' | 'webgpu' | 'auto';
+
 /** Runtime environment detection result. */
 export interface RuntimeCapabilities {
   webgpuAvailable: boolean;
   wasmAvailable: boolean;
+  /** The backend that was explicitly requested ('auto' = let hardware decide). */
+  requestedBackend: BackendRequest;
+  /** The backend actually selected after applying requestedBackend + hardware. */
   selectedBackend: InferenceBackend;
   browser: 'chrome' | 'firefox' | 'unknown';
   devicePixelRatio: number;

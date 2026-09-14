@@ -5,14 +5,16 @@
  * Handles model loading, SHA-256 hash verification, backend selection,
  * and per-inference metrics.
  *
- * ONNX Runtime Web is statically imported so esbuild bundles it at
- * compile time. This is required for Chrome MV3 service workers, which
- * reject any service worker code that CONTAINS a dynamic import() call
- * — even inside dead-code paths that are never executed.
- *
- * The ortMv3Plugin in build.mjs patches ORT's internal dynamic import()
- * (the thread worker loader, dead at numThreads=1) out of the bundle
- * before esbuild processes it, eliminating all import() from the SW.
+ * ORT loading strategy (MV3-compatible):
+ *   - Our code uses `await import('onnxruntime-web/wasm')` inside
+ *     loadOnnxRuntime(). esbuild bundles ORT inline at build time.
+ *     No runtime import() call is emitted by our code in the SW bundle.
+ *   - ORT 1.29.0 internally contains a dead-code import() for its
+ *     thread worker loader (`us = async n => (await import(n)).default`).
+ *     The ortMv3Plugin in build.mjs intercepts ort.wasm.bundle.min.mjs
+ *     at build time and replaces that import() with a safe stub.
+ *   - Result: service-worker.js contains zero executable import() calls.
+ *   - In Node.js test context, the dynamic import works normally via tsx.
  */
 
 import type {
@@ -22,12 +24,10 @@ import type {
   InferenceBackend,
 } from './types';
 
-// STATIC import of WASM-only ORT bundle.
-// esbuild resolves this to ort.wasm.bundle.min.mjs (71KB) at build time.
-// No runtime import() call is emitted by our code.
-// The ortMv3Plugin in build.mjs patches out ORT's own dead-code import()
-// so the final service-worker.js contains zero import() expressions.
-import * as _ortWasm from 'onnxruntime-web/wasm';
+// NOTE: No static ORT import here. esbuild bundles the dynamic import
+// from loadOnnxRuntime() inline. ortMv3Plugin patches ORT's internal
+// import() at build time. Both static and dynamic imports trigger the
+// same onLoad() hook in the plugin.
 
 /**
  * ONNX Runtime Web inference session implementation.
@@ -86,15 +86,25 @@ export class OnnxSession implements InferenceSession {
     };
 
     // ── Create ONNX session ──────────────────────────────────────
+    // IMPORTANT: With WASM-only ORT bundle (onnxruntime-web/wasm),
+    // WebGPU EP is not registered. executionProviders=[{name:'webgpu'}]
+    // would throw immediately. For backend='wasm', getExecutionProviders()
+    // returns [{name:'wasm'}] only — no WebGPU attempt, no fallback.
     try {
       this._onnxSession = await this._ort.InferenceSession.create(
         modelBytes,
         sessionOptions,
       );
+      console.log(`[OnnxSession] model=${this.manifest.id} backend=${this._backend}`);
       console.log(`[ModelRuntime] backend=${this._backend} model=${this.manifest.id}`);
     } catch (e) {
-      // WebGPU session creation failed → fall back to WASM
-      // The ORT env is already configured for WASM, so this is safe.
+      // Silent WebGPU→WASM fallback is ONLY allowed when:
+      //   a) backend was explicitly requested as 'webgpu'
+      //   b) The WebGPU session creation itself failed (not ORT init)
+      //
+      // For backend='wasm': getExecutionProviders() never returns webgpu,
+      // so this catch is only reached for genuine WASM session failures.
+      // Do NOT silently retry — surface the error clearly.
       if (this._backend === 'webgpu') {
         console.warn(
           '[OnnxSession] WebGPU session creation failed, falling back to WASM.',
@@ -106,8 +116,11 @@ export class OnnxSession implements InferenceSession {
           modelBytes,
           sessionOptions,
         );
+        console.log(`[OnnxSession] model=${this.manifest.id} backend=wasm (fallback from webgpu)`);
         console.log(`[ModelRuntime] backend=wasm (fallback) model=${this.manifest.id}`);
       } else {
+        // WASM or CPU session failure — do not retry, fail closed.
+        console.error(`[OnnxSession] Session creation failed (backend=${this._backend}):`, (e as Error).message);
         throw e;
       }
     }
@@ -245,29 +258,44 @@ export class OnnxSession implements InferenceSession {
    *
    *   FIX 1 (build time): ortMv3Plugin in build.mjs replaces ORT's
    *     import() with a stub before esbuild bundles the code.
+   *     Plugin uses onLoad() hook — works for both static and dynamic imports.
    *
-   *   FIX 2 (this file): Static `import * as _ortWasm from 'onnxruntime-web/wasm'`
-   *     at module level. esbuild bundles ORT inline at compile time.
-   *     Our own code emits zero import() calls.
-   *
-   *   FIX 3 (runtime): Set proxy=false + wasmBinary to prevent ORT from
+   *   FIX 2 (runtime): Set proxy=false + wasmBinary to prevent ORT from
    *     ever trying to load a worker or blob URL.
+   *
+   * ORT loading:
+   *   Browser/SW: esbuild bundles `await import('onnxruntime-web/wasm')`
+   *     inline at build time. No runtime import() call in service-worker.js.
+   *   Node.js tests: dynamic import works normally via tsx.
    *
    * WASM runtime assets (extension-local, no CDN):
    *   ort-wasm-simd-threaded.mjs   → worker bootstrap (not used at numThreads=1)
    *   ort-wasm-simd-threaded.wasm  → WASM binary (pre-fetched into wasmBinary)
    */
   private async loadOnnxRuntime(): Promise<any> {
-    // ORT is statically imported at module level (_ortWasm).
-    // No runtime import() call. MV3-safe.
-    const ort = _ortWasm;
+    let ort: any;
+    try {
+      // esbuild bundles this inline at build time for the service worker.
+      // In Node.js test context, tsx resolves it as a normal dynamic import.
+      // The ortMv3Plugin patches ORT's internal import() in both cases.
+      ort = await import('onnxruntime-web/wasm');
+    } catch {
+      // Fallback: ort loaded as global via script tag (offscreen page context)
+      if ((globalThis as any).ort) {
+        ort = (globalThis as any).ort;
+      } else {
+        throw new Error(
+          'ONNX Runtime Web not available. Ensure onnxruntime-web/wasm is bundled.',
+        );
+      }
+    }
 
     // Configure ORT env exactly once across all 4 parallel sessions.
     // Uses a singleton Promise to prevent race on concurrent Promise.all()
     // initialization (4 sessions initialised simultaneously by coordinator).
     await OnnxSession.getOrtConfigPromise(ort);
 
-    console.log('[OnnxSession] ORT runtime loaded (static import, WASM-only, MV3-safe)');
+    console.log('[OnnxSession] ORT runtime loaded (dynamic import, WASM-only, MV3-safe)');
     return ort;
   }
 
