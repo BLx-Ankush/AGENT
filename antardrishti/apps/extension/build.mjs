@@ -3,8 +3,15 @@
  *
  * Produces separate bundles for:
  *   - service worker (ESM for Chrome, IIFE for Firefox)
+ *   - offscreen document (IIFE for Chrome only — inference runtime)
  *   - content script (IIFE — injected into pages)
  *   - popup (IIFE)
+ *
+ * Offscreen document notes:
+ *   - Chrome MV3 offscreen documents support Workers and dynamic import().
+ *   - The ortMv3Plugin is NOT applied to offscreen.js — it's not needed there.
+ *   - ortMv3Plugin is KEPT on service-worker.js (amendment 3: remove only
+ *     after live Chrome offscreen inference is confirmed working).
  *
  * Usage:
  *   node build.mjs                     # builds Chrome by default
@@ -113,7 +120,21 @@ async function build() {
   });
 
 
-  // 2. Content script (always IIFE — injected into web pages)
+  // 2. Offscreen inference document (Chrome only)
+  // Offscreen documents support Workers + dynamic import() natively.
+  // DO NOT apply ortMv3Plugin here — it is not needed outside service workers.
+  // Firefox has no offscreen API — skip for Firefox builds.
+  if (!isFirefox) {
+    await esbuild.build({
+      ...commonOptions,
+      entryPoints: [join(__dirname, 'src/offscreen/offscreen.ts')],
+      outfile: join(distDir, 'offscreen.js'),
+      format: 'iife',
+      // No plugins — offscreen context allows import() and Workers
+    });
+  }
+
+  // 3. Content script (always IIFE — injected into web pages)
   await esbuild.build({
     ...commonOptions,
     entryPoints: [join(__dirname, 'src/content/content-script.ts')],
@@ -121,7 +142,7 @@ async function build() {
     format: 'iife',
   });
 
-  // 3. Popup
+  // 4. Popup
   await esbuild.build({
     ...commonOptions,
     entryPoints: [join(__dirname, 'src/ui/popup.ts')],
@@ -129,7 +150,7 @@ async function build() {
     format: 'iife',
   });
 
-  // 4. Copy manifest
+  // 5. Copy manifest
   const manifestSrc = join(__dirname, `manifest.${target}.json`);
   if (existsSync(manifestSrc)) {
     copyFileSync(manifestSrc, join(distDir, 'manifest.json'));
@@ -138,7 +159,7 @@ async function build() {
     process.exit(1);
   }
 
-  // 5. Copy popup HTML + CSS
+  // 6. Copy popup HTML + CSS
   copyFileSync(
     join(__dirname, 'src/ui/popup.html'),
     join(distDir, 'popup.html'),
@@ -148,13 +169,26 @@ async function build() {
     copyFileSync(cssPath, join(distDir, 'popup.css'));
   }
 
-  // 5b. Copy ORT smoke test page + external script + CSS (CSP-compliant — no inline JS)
+  // 6b. Copy offscreen HTML (Chrome only)
+  // The offscreen document is a real extension page — not a data URL or blob URL.
+  // It must be bundled as a static file in the extension package.
+  if (!isFirefox) {
+    const offscreenHtmlSrc = join(__dirname, 'src/offscreen/offscreen.html');
+    if (existsSync(offscreenHtmlSrc)) {
+      copyFileSync(offscreenHtmlSrc, join(distDir, 'offscreen.html'));
+    } else {
+      console.error('❌ offscreen.html not found:', offscreenHtmlSrc);
+      process.exit(1);
+    }
+  }
+
+  // 6c. Copy ORT smoke test page + external script + CSS (CSP-compliant — no inline JS)
   for (const f of ['ort-smoke-test.html', 'ort-smoke-test.js', 'ort-smoke-test.css']) {
     const src = join(__dirname, f);
     if (existsSync(src)) copyFileSync(src, join(distDir, f));
   }
 
-  // 6. Copy ONNX model assets → dist/{target}/models/
+  // 7. Copy ONNX model assets → dist/{target}/models/
 
   // Models are accessed by the service worker at chrome-extension://<id>/models/*.onnx
   const modelsSrc = join(__dirname, 'assets/models');

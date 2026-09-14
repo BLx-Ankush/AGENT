@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!--
+  ANTARDRISHTI — Offscreen Inference Document
+
+  This is a Chrome MV3 Offscreen Document used exclusively for local
+  ONNX model inference. It is NOT a visible UI page.
+
+  TRUST BOUNDARY:
+    This document is a computation-only component. It:
+      ✓ Loads ONNX Runtime Web (WASM / WebGPU)
+      ✓ Initializes model sessions
+      ✓ Decodes PNG captures via OffscreenCanvas
+      ✓ Runs PerceptionPipeline
+      ✗ Does NOT send planner requests
+      ✗ Does NOT perform external network requests
+      ✗ Does NOT redeem vault tokens
+      ✗ Does NOT execute browser actions
+
+  The service worker is the sole security and egress authority.
+
+  CSP: extension_pages policy — 'self' + 'wasm-unsafe-eval'
+  No inline scripts. All logic is in offscreen.js (bundled by esbuild).
+
+  Offscreen reason: WORKERS
+  Justification: Local ONNX inference for privacy-critical browser
+  perception; raw screenshot data remains inside the extension.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ANTARDRISHTI Inference Runtime</title>
+  </head>
+  <body>
+    <!--
+      No visible UI. Body is empty — this document is never shown to the user.
+      The offscreen document lifecycle is managed by the service worker.
+    -->
+    <script src="offscreen.js"></script>
+  </body>
+</html>
