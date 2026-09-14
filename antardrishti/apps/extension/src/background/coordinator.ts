@@ -100,6 +100,23 @@ const INITIAL_STATE: CoordinatorState = {
   plannerUrl: null,
 };
 
+/**
+ * Type guard for the privileged smoke-test diagnostic message.
+ *
+ * Admits ONLY { type: 'SMOKE_OFFSCREEN_TEST' }.
+ * Accepts no payload keys -- the message must not carry user data,
+ * screenshots, tokens, or arbitrary execution instructions.
+ *
+ * This is an explicit whitelist, not a generic envelope bypass.
+ * Only this single type string is recognized.
+ */
+function isSmokeOffscreenTestMessage(message: unknown): boolean {
+  if (typeof message !== 'object' || message === null) return false;
+  const m = message as Record<string, unknown>;
+  // Accept only exact type match -- no payload tolerated
+  return m.type === 'SMOKE_OFFSCREEN_TEST' && Object.keys(m).length === 1;
+}
+
 export class Coordinator {
   private state: CoordinatorState = { ...INITIAL_STATE };
   private capture = new CaptureManager();
@@ -428,6 +445,17 @@ export class Coordinator {
       return;
     }
 
+    // STEP 2a: Privileged internal diagnostic messages.
+    // SMOKE_OFFSCREEN_TEST is an internal extension diagnostic -- it carries
+    // no user data, screenshot data, tokens, or arbitrary payload.
+    // It is NOT a protocol-v2 envelope and must be routed explicitly.
+    // Only this exact type string is admitted. Any other non-envelope,
+    // non-offscreen message still hits the rejection below.
+    if (isSmokeOffscreenTestMessage(message)) {
+      this.handleSmokeOffscreenTest(sendResponse);
+      return;
+    }
+
     // STEP 2: All other messages must be valid protocol-v2 envelopes.
     if (!isValidMessageEnvelope(message)) {
       sendResponse({ error: 'Invalid message envelope' });
@@ -474,12 +502,6 @@ export class Coordinator {
       case MESSAGE_TYPES.DOM_SNAPSHOT:
         sendResponse({ ack: true });
         break;
-
-      case 'SMOKE_OFFSCREEN_TEST': {
-        // Phase 9 smoke test: S1-S6 offscreen ONNX inference proof.
-        this.handleSmokeOffscreenTest(sendResponse);
-        break;
-      }
 
       default:
         sendResponse({ ack: true });
