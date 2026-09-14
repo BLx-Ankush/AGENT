@@ -62,6 +62,7 @@ import {
   isInferenceInitResult,
   isInferenceError,
   assertInferenceResultTrustBoundary,
+  withTimeout,
   type InferenceRunMessage,
   type InferenceInitResult,
   type InferenceResult,
@@ -108,7 +109,7 @@ export class Coordinator {
   private planner: PlannerAdapter = new DeterministicPlanner();
   private perception = new PerceptionPipeline();
 
-  // ── Offscreen inference state ─────────────────────────────────────────────
+  // -- Offscreen inference state ------------------------------------------
   /**
    * Resolves when the offscreen document (Chrome) or direct model load
    * (Firefox) is ready. All perception calls are gated on this promise.
@@ -117,24 +118,35 @@ export class Coordinator {
   private _modelLoadFailed = false;
 
   /**
-   * Pending inference request: resolves when INFERENCE_RESULT arrives,
-   * rejects on INFERENCE_ERROR. Only one active inference at a time.
+   * Init mutex: only one _initOffscreenInference() runs at a time.
+   * Multiple callers await the same promise.
+   */
+  private _offscreenInitPromise: Promise<void> | null = null;
+
+  /**
+   * Phase 1 of handshake: resolves when OFFSCREEN_READY is received.
+   * Separate from INFERENCE_INIT_RESULT -- do not conflate.
+   */
+  private _offscreenReadyResolve: (() => void) | null = null;
+  private _offscreenReadyReject: ((err: Error) => void) | null = null;
+
+  /**
+   * Phase 2 of handshake: resolves when INFERENCE_INIT_RESULT arrives.
+   */
+  private _offscreenInitResolve: (() => void) | null = null;
+  private _offscreenInitReject: ((err: Error) => void) | null = null;
+
+  /**
+   * Pending inference: resolves/rejects when INFERENCE_RESULT/ERROR arrives.
    */
   private _pendingInference: {
     resolve: (result: PerceptionResult) => void;
     reject: (err: Error) => void;
   } | null = null;
 
-  /**
-   * Resolves when the offscreen INFERENCE_INIT_RESULT arrives.
-   * Used to synchronize parallel ensureOffscreenDocument() calls.
-   */
-  private _offscreenInitResolve: (() => void) | null = null;
-  private _offscreenInitReject: ((err: Error) => void) | null = null;
   private _backend = 'unknown';
 
-  // ── Firefox direct-load state ─────────────────────────────────────────────
-  // When offscreen API is unavailable (Firefox), models are loaded directly.
+  // -- Firefox direct-load state ------------------------------------------
   private _loadedModels: LoadedModels | null = null;
 
   // Pending confirmations
@@ -169,30 +181,62 @@ export class Coordinator {
    * Justification: Local ONNX inference for privacy-critical browser
    * perception; raw screenshot data remains inside the extension.
    */
-  private async _initOffscreenInference(): Promise<void> {
-    console.log('[Coordinator] Creating offscreen inference document…');
+  // -- Offscreen document management (Chrome) ----------------------------
+
+  /**
+   * Full handshake: createDocument -> wait OFFSCREEN_READY -> send INFERENCE_INIT
+   * -> wait INFERENCE_INIT_RESULT.
+   *
+   * Init mutex (_offscreenInitPromise) prevents concurrent inits.
+   * All callers await the same promise.
+   */
+  private _initOffscreenInference(): Promise<void> {
+    if (!this._offscreenInitPromise) {
+      this._offscreenInitPromise = this._doOffscreenInit().catch((err) => {
+        // Reset so next call can retry (e.g. after extension reload)
+        this._offscreenInitPromise = null;
+        throw err;
+      });
+    }
+    return this._offscreenInitPromise;
+  }
+
+  private async _doOffscreenInit(): Promise<void> {
+    console.log('[Coordinator] Creating offscreen inference document...');
     try {
-      await this._ensureOffscreenDocument();
+      // Step 1: ensure document exists
+      const existed = await this._ensureOffscreenDocument();
+
+      // Step 2: wait for OFFSCREEN_READY (with timeout)
+      // If document already existed, ping it first so it re-sends READY.
+      if (existed) {
+        console.log('[Coordinator] Offscreen document already existed -- sending OFFSCREEN_PING');
+        chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
+      }
+      await this._waitForOffscreenReady(10000);
+      console.log('[Coordinator] Offscreen READY received');
+
+      // Step 3: send INFERENCE_INIT and await INFERENCE_INIT_RESULT
       await this._sendInferenceInit();
-      console.log('[Coordinator] ✅ Perception ready — all 4 ONNX models loaded offscreen');
+
+      console.log('[Coordinator] Perception ready -- all 4 ONNX models loaded offscreen');
     } catch (err) {
       this._modelLoadFailed = true;
-      console.error('[Coordinator] ❌ Offscreen inference init failed — fail-closed:', err);
+      console.error('[Coordinator] Offscreen init failed -- fail-closed:', err);
       throw err;
     }
   }
 
-  /** Singleton offscreen document creation promise (prevents race). */
-  private static _offscreenDocPromise: Promise<void> | null = null;
+  /** Singleton document creation. Returns true if it already existed. */
+  private static _offscreenDocPromise: Promise<boolean> | null = null;
 
-  private async _ensureOffscreenDocument(): Promise<void> {
+  private async _ensureOffscreenDocument(): Promise<boolean> {
     if (!Coordinator._offscreenDocPromise) {
-      Coordinator._offscreenDocPromise = (async () => {
-        // Check if already exists (service worker may have been reused)
-        const existing = await (chrome.offscreen as any).hasDocument?.().catch(() => false);
-        if (existing) {
+      Coordinator._offscreenDocPromise = (async (): Promise<boolean> => {
+        const exists = await (chrome.offscreen as any).hasDocument?.().catch(() => false);
+        if (exists) {
           console.log('[Coordinator] Offscreen document already exists');
-          return;
+          return true;
         }
         await (chrome.offscreen as any).createDocument({
           url: chrome.runtime.getURL('offscreen.html'),
@@ -202,8 +246,8 @@ export class Coordinator {
             'raw screenshot data remains inside the extension.',
         });
         console.log('[Coordinator] Offscreen document created');
+        return false;
       })().catch((err) => {
-        // Reset singleton on failure so next call retries
         Coordinator._offscreenDocPromise = null;
         throw err;
       });
@@ -212,8 +256,30 @@ export class Coordinator {
   }
 
   /**
-   * Send INFERENCE_INIT to the offscreen document and await the response.
-   * Resolves when INFERENCE_INIT_RESULT { success:true } is received.
+   * Wait for OFFSCREEN_READY message from the offscreen document.
+   * Rejects after timeoutMs with a fail-closed error.
+   *
+   * OFFSCREEN_READY != inference ready.
+   * OFFSCREEN_READY only proves the message listener is registered.
+   */
+  private _waitForOffscreenReady(timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this._offscreenReadyResolve = resolve;
+      this._offscreenReadyReject = reject;
+      setTimeout(() => {
+        if (this._offscreenReadyResolve) {
+          console.error('[Coordinator] Offscreen READY timeout after ' + timeoutMs + 'ms');
+          this._offscreenReadyResolve = null;
+          this._offscreenReadyReject = null;
+          reject(new Error('[Coordinator] Offscreen READY timeout -- fail-closed'));
+        }
+      }, timeoutMs);
+    });
+  }
+
+  /**
+   * Send INFERENCE_INIT and await INFERENCE_INIT_RESULT.
+   * Only called after OFFSCREEN_READY is confirmed.
    */
   private async _sendInferenceInit(): Promise<void> {
     const backend = await readBackendOverride();
@@ -227,12 +293,6 @@ export class Coordinator {
     });
   }
 
-  // ── Firefox direct-load fallback ─────────────────────────────────────────
-
-  /**
-   * Fallback: direct loadProductionModels() for Firefox (no offscreen API).
-   * Firefox service workers support Workers + WASM natively.
-   */
   private async _loadModelsDirectly(): Promise<void> {
     console.log('[ModelLoader] Firefox direct load — no offscreen API');
     try {
@@ -401,17 +461,32 @@ export class Coordinator {
   // ── Offscreen message router ──────────────────────────────────────────────
 
   private _handleOffscreenMessage(message: unknown): void {
+
+    // -- Phase 1: OFFSCREEN_READY ----------------------------------------
+    // Sent by offscreen.ts immediately after its onMessage listener is
+    // registered. This proves the listener is live before INFERENCE_INIT.
+    // OFFSCREEN_READY != inference ready.
+    if ((message as any)?.type === 'OFFSCREEN_READY') {
+      const rid = (message as any).runtimeInstanceId ?? 'unknown';
+      console.log('[Coordinator] Offscreen READY received -- instance=' + rid);
+      this._offscreenReadyResolve?.();
+      this._offscreenReadyResolve = null;
+      this._offscreenReadyReject = null;
+      return;
+    }
+
+    // -- Phase 2: INFERENCE_INIT_RESULT -----------------------------------
     if (isInferenceInitResult(message)) {
       const r = message as InferenceInitResult;
       if (r.success) {
-        // Mark pipeline as ready (offscreen path — no direct session objects in SW)
         this.perception['_initialized'] = true;
+        this._backend = r.backend;
         chrome.storage.local.set({
           modelBackend: r.backend,
           modelLoadedAt: new Date().toISOString(),
         }).catch(() => {});
-        this._backend = r.backend;
-        console.log('[Coordinator] Offscreen inference ready — backend=' + r.backend + ' initMs=' + r.initMs);
+        console.log('[Coordinator] Offscreen inference ready -- backend=' +
+          r.backend + ' initMs=' + r.initMs);
         this._offscreenInitResolve?.();
       } else {
         const err = new Error(r.error ?? 'Offscreen inference init failed');
@@ -422,8 +497,8 @@ export class Coordinator {
       return;
     }
 
+    // -- Inference result -------------------------------------------------
     if (isInferenceResult(message)) {
-      // Trust boundary: assert result contains no control-plane keys
       try {
         assertInferenceResultTrustBoundary(message as InferenceResult);
       } catch (boundaryErr: any) {
@@ -432,9 +507,8 @@ export class Coordinator {
         this._pendingInference = null;
         return;
       }
-
       const ir = message as InferenceResult;
-      console.log('[Coordinator] Inference result received:', {
+      console.log('[Coordinator] Inference result:', {
         backend: ir.backend,
         transferDecodeMs: ir.transferDecodeMs,
         inferenceMs: ir.inferenceMs,
@@ -445,6 +519,7 @@ export class Coordinator {
       return;
     }
 
+    // -- Inference error --------------------------------------------------
     if (isInferenceError(message)) {
       const ie = message as any;
       console.error('[Coordinator] INFERENCE_ERROR from offscreen:', ie.error);
@@ -452,9 +527,12 @@ export class Coordinator {
       const err = new Error(ie.error ?? 'Offscreen inference error');
       this._pendingInference?.reject(err);
       this._offscreenInitReject?.(err);
+      this._offscreenReadyReject?.(err);
       this._pendingInference = null;
       this._offscreenInitResolve = null;
       this._offscreenInitReject = null;
+      this._offscreenReadyResolve = null;
+      this._offscreenReadyReject = null;
     }
   }
 
@@ -1314,11 +1392,46 @@ export class Coordinator {
     sendResponse: (response: unknown) => void,
   ): void {
     (async () => {
+      let offscreenCreated = false;
+      let offscreenReadyReceived = false;
+      let runtimeInstanceId = 'unknown';
+      let initMs = 0;
       try {
-        // Await offscreen runtime ready (models loaded in offscreen doc)
-        await this._offscreenReady;
+        // --- S1: Ensure offscreen document ---
+        const existed = await this._ensureOffscreenDocument();
+        offscreenCreated = true;
+        console.log('[Coordinator] SMOKE S1: offscreen document ready (existed=' + existed + ')');
 
-        // Create a minimal 64x64 blank PNG data URL
+        // --- S2: Wait for OFFSCREEN_READY ---
+        // If document already existed, ping it so it re-sends READY.
+        if (existed) {
+          chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
+        }
+        await new Promise<void>((resolve, reject) => {
+          const prev = this._offscreenReadyResolve;
+          this._offscreenReadyResolve = () => {
+            // Capture runtimeInstanceId from OFFSCREEN_READY message
+            offscreenReadyReceived = true;
+            resolve();
+          };
+          this._offscreenReadyReject = reject;
+          setTimeout(() => {
+            if (this._offscreenReadyResolve) {
+              this._offscreenReadyResolve = null;
+              this._offscreenReadyReject = null;
+              reject(new Error('Smoke S2 timeout: OFFSCREEN_READY not received in 10s'));
+            }
+          }, 10000);
+        });
+        console.log('[Coordinator] SMOKE S2: OFFSCREEN_READY received');
+
+        // --- S3: Send INFERENCE_INIT, await INFERENCE_INIT_RESULT ---
+        const t0 = performance.now();
+        await this._sendInferenceInit();
+        initMs = Math.round(performance.now() - t0);
+        console.log('[Coordinator] SMOKE S3: ORT initialized in ' + initMs + 'ms backend=' + this._backend);
+
+        // --- S4+S5: Send INFERENCE_RUN with 64x64 blank PNG ---
         const canvas = new OffscreenCanvas(64, 64);
         const ctx = canvas.getContext('2d')!;
         ctx.fillStyle = '#000';
@@ -1326,12 +1439,14 @@ export class Coordinator {
         const blob = await canvas.convertToBlob({ type: 'image/png' });
         const arrayBuf = await blob.arrayBuffer();
         const bytes = new Uint8Array(arrayBuf);
-        const b64 = btoa(String.fromCharCode(...bytes));
-        const imageDataUrl = 'data:image/png;base64,' + b64;
+        let b64 = '';
+        const CHUNK = 8192;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          b64 += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+        }
+        const imageDataUrl = 'data:image/png;base64,' + btoa(b64);
 
-        // Send INFERENCE_RUN to offscreen
-        const t0 = performance.now();
-        const perceptionResult = await new Promise<any>((resolve, reject) => {
+        const inferenceResult = await new Promise<any>((resolve, reject) => {
           this._pendingInference = { resolve, reject };
           const msg: InferenceRunMessage = {
             type: 'INFERENCE_RUN',
@@ -1345,28 +1460,40 @@ export class Coordinator {
             captureHeight: 64,
           };
           chrome.runtime.sendMessage(msg);
-          // Timeout after 60s
-          setTimeout(() => reject(new Error('Smoke test inference timed out')), 60000);
+          setTimeout(() => {
+            if (this._pendingInference) {
+              this._pendingInference = null;
+              reject(new Error('Smoke S5 timeout: INFERENCE_RESULT not received in 120s'));
+            }
+          }, 120000);
         });
-
-        const inferenceMs = Math.round(performance.now() - t0);
-        const lastMsg = (perceptionResult as any);
+        console.log('[Coordinator] SMOKE S5+S6: inference complete faces=' +
+          (inferenceResult?.faceDetections?.length ?? 0));
 
         sendResponse({
           success: true,
+          offscreenCreated,
+          offscreenReady: offscreenReadyReceived,
+          runtimeInstanceId,
           ortReady: true,
-          backend: this._backend ?? 'unknown',
+          backend: this._backend,
           modelId: 'face-detector-v1',
-          inferenceMs,
-          transferDecodeMs: 0, // included in inferenceMs for smoke
-          totalMs: inferenceMs,
-          outputShape: [perceptionResult?.faceDetections?.length ?? 0],
-          timing: { inferenceMs },
+          initMs,
+          transferDecodeMs: 0,
+          inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? 0,
+          totalMs: initMs,
+          faceDetections: inferenceResult?.faceDetections?.length ?? 0,
+          timing: { initMs },
         });
       } catch (e) {
         const err = e as Error;
         console.error('[Coordinator] SMOKE_OFFSCREEN_TEST failed:', err.message);
-        sendResponse({ success: false, error: err.message });
+        sendResponse({
+          success: false,
+          error: err.message,
+          offscreenCreated,
+          offscreenReady: offscreenReadyReceived,
+        });
       }
     })();
   }

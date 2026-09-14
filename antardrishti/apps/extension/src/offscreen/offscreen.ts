@@ -1,21 +1,35 @@
 ﻿/**
  * ANTARDRISHTI -- Offscreen Inference Runtime
  *
- * Entry point for the Chrome MV3 Offscreen Document.
- * Runs ONNX inference locally. Service worker is the sole security authority.
+ * Chrome MV3 Offscreen Document entry point.
+ * Computation-only: receives messages from service worker, runs ONNX,
+ * returns results. Service worker is the sole security/egress authority.
+ *
+ * STARTUP SEQUENCE (Phase 9 blocker #5 -- explicit handshake):
+ *
+ *   1. Script loads
+ *   2. chrome.runtime.onMessage listener is registered     <-- critical order
+ *   3. OFFSCREEN_READY sent immediately                    <-- listener IS live
+ *   4. Service worker receives OFFSCREEN_READY
+ *   5. Service worker sends INFERENCE_INIT
+ *   6. loadProductionModels() runs in this offscreen context
+ *   7. INFERENCE_INIT_RESULT sent back
+ *   8. Production inference loop begins
+ *
+ * OFFSCREEN_READY != inference ready.
+ * OFFSCREEN_READY only proves the message listener is registered.
+ * Inference readiness is signaled by INFERENCE_INIT_RESULT.success=true.
  *
  * TRUST BOUNDARY:
- *   OK  Load ONNX Runtime Web (no import() restriction in offscreen context)
+ *   OK  Load ONNX Runtime Web (no import() restriction here)
  *   OK  Initialize 4 production model sessions
- *   OK  Decode PNG captures via OffscreenCanvas
+ *   OK  Decode PNG via OffscreenCanvas
  *   OK  Run PerceptionPipeline
- *   OK  Return serialized PerceptionResult to service worker
- *   NO  Planner requests / external network / vault / browser actions
- *
- * Message protocol:
- *   INFERENCE_INIT    -> load models -> INFERENCE_INIT_RESULT
- *   INFERENCE_RUN     -> decode PNG -> pipeline.run() -> INFERENCE_RESULT
- *   INFERENCE_DISPOSE -> dispose models
+ *   OK  Return serialized PerceptionResult
+ *   NO  Planner requests
+ *   NO  External network calls
+ *   NO  Vault token redemption
+ *   NO  Browser action execution
  */
 
 import {
@@ -26,6 +40,7 @@ import type {
   InferenceRunMessage,
   InferenceResult,
   InferenceInitResult,
+  OffscreenReadyMessage,
 } from '@antardrishti/model-runner/offscreen-bridge';
 import {
   loadProductionModels,
@@ -34,113 +49,56 @@ import {
 } from '@antardrishti/model-runner';
 import type { LoadedModels } from '@antardrishti/model-runner';
 
-// -- State -------------------------------------------------------------------
+// -- Runtime instance ID ---------------------------------------------------
+// Unique per document load. Allows the SW to detect stale documents.
+const RUNTIME_INSTANCE_ID: string = crypto.randomUUID();
+
+// -- State -----------------------------------------------------------------
 
 let _pipeline: PerceptionPipeline | null = null;
 let _loadedModels: LoadedModels | null = null;
 let _backend = 'unknown';
 let _isReady = false;
 
-// -- Initialization ----------------------------------------------------------
+// -- Helpers ---------------------------------------------------------------
 
-async function initInference(requestedBackend: string): Promise<void> {
-  const t0 = performance.now();
-  console.log('[InferenceRuntime] context=offscreen');
-  console.log('[InferenceRuntime] requestedBackend=' + requestedBackend);
-
-  const models = await loadProductionModels();
-  _backend = models.backend;
-  console.log('[InferenceRuntime] selectedBackend=' + _backend);
-
-  _pipeline = new PerceptionPipeline();
-  _pipeline.registerOnnxModels(models);
-  _loadedModels = models;
-  _isReady = true;
-
-  const initMs = Math.round(performance.now() - t0);
-  console.log('[InferenceRuntime] All 4 models ready in ' + initMs + 'ms');
-
-  const result: InferenceInitResult = {
-    type: 'INFERENCE_INIT_RESULT',
-    success: true,
-    backend: _backend,
-    initMs,
+function sendReady(): void {
+  const msg: OffscreenReadyMessage = {
+    type: 'OFFSCREEN_READY',
+    runtimeInstanceId: RUNTIME_INSTANCE_ID,
   };
-  chrome.runtime.sendMessage(result);
+  chrome.runtime.sendMessage(msg);
 }
 
-// -- PNG -> ImageData decode --------------------------------------------------
-
-async function decodeImageDataUrl(
-  imageDataUrl: string,
-  width: number,
-  height: number,
-): Promise<{ imageData: ImageData; decodeMs: number }> {
-  const t0 = performance.now();
-  const resp = await fetch(imageDataUrl);
-  const blob = await resp.blob();
-  const bitmap = await createImageBitmap(blob);
-  const canvas = new OffscreenCanvas(width || bitmap.width, height || bitmap.height);
-  const ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return { imageData, decodeMs: Math.round(performance.now() - t0) };
-}
-
-// -- Inference run -----------------------------------------------------------
-
-async function runInference(msg: InferenceRunMessage): Promise<void> {
-  const t0 = performance.now();
-
-  if (!_isReady || !_pipeline) {
-    chrome.runtime.sendMessage({ type: 'INFERENCE_ERROR', error: 'Runtime not initialized', failClosed: true });
-    return;
-  }
-
-  try {
-    const { imageData, decodeMs } = await decodeImageDataUrl(
-      msg.imageDataUrl, msg.captureWidth, msg.captureHeight,
-    );
-    console.log('[InferenceRuntime] PNG decoded: ' + imageData.width + 'x' + imageData.height + ' in ' + decodeMs + 'ms');
-
-    const inferenceStart = performance.now();
-    const perceptionResult = await _pipeline.run(
-      imageData, msg.changedTiles, msg.observationId,
-      msg.frameId, msg.documentGeneration, msg.canvasContext,
-    );
-    const inferenceMs = Math.round(performance.now() - inferenceStart);
-    const totalMs = Math.round(performance.now() - t0);
-
-    console.log('[InferenceRuntime] Inference complete: inferenceMs=' + inferenceMs + ' totalMs=' + totalMs);
-
-    const result: InferenceResult = {
-      type: 'INFERENCE_RESULT',
-      result: perceptionResult,
-      backend: _backend,
-      transferDecodeMs: decodeMs,
-      inferenceMs,
-      totalMs,
-    };
-    assertInferenceResultTrustBoundary(result);
-    chrome.runtime.sendMessage(result);
-  } catch (err: any) {
-    console.error('[InferenceRuntime] Inference failed:', err);
-    chrome.runtime.sendMessage({ type: 'INFERENCE_ERROR', error: err?.message ?? String(err), failClosed: true });
-  }
-}
-
-// -- Message handler ---------------------------------------------------------
+// -- Message handler -------------------------------------------------------
+// CRITICAL: register listener BEFORE sending OFFSCREEN_READY.
+// This guarantees INFERENCE_INIT arriving immediately after OFFSCREEN_READY
+// is never dropped.
 
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   if (!isSwToOffscreenMessage(message)) {
-    console.warn('[InferenceRuntime] Rejected unknown message type:', (message as any)?.type);
+    // Unknown message type -- log but do not crash
+    const t = (message as any)?.type;
+    if (t !== undefined) {
+      console.warn('[InferenceRuntime] Ignored unknown message type:', t);
+    }
     return false;
   }
 
   switch (message.type) {
+
+    case 'OFFSCREEN_PING': {
+      // SW is checking if this document's listener is alive.
+      // Reply with OFFSCREEN_READY so SW can proceed.
+      console.log('[InferenceRuntime] OFFSCREEN_PING received -- sending OFFSCREEN_READY');
+      sendReady();
+      return false;
+    }
+
     case 'INFERENCE_INIT': {
-      initInference(message.requestedBackend).catch((err: any) => {
+      const requested = message.requestedBackend;
+      initInference(requested).catch((err: any) => {
+        console.error('[InferenceRuntime] Init failed:', err);
         const failResult: InferenceInitResult = {
           type: 'INFERENCE_INIT_RESULT',
           success: false,
@@ -155,7 +113,12 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 
     case 'INFERENCE_RUN': {
       runInference(message).catch((err: any) => {
-        chrome.runtime.sendMessage({ type: 'INFERENCE_ERROR', error: err?.message ?? String(err), failClosed: true });
+        console.error('[InferenceRuntime] Run failed:', err);
+        chrome.runtime.sendMessage({
+          type: 'INFERENCE_ERROR',
+          error: err?.message ?? String(err),
+          failClosed: true,
+        });
       });
       return false;
     }
@@ -177,4 +140,117 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   }
 });
 
-console.log('[InferenceRuntime] Offscreen document loaded -- awaiting INFERENCE_INIT');
+// -- Send OFFSCREEN_READY --------------------------------------------------
+// Sent AFTER listener registration (above). This ordering is guaranteed by
+// the JavaScript event loop -- the addListener call completes synchronously
+// before the sendMessage below executes.
+
+console.log('[InferenceRuntime] Offscreen document loaded -- instance=' + RUNTIME_INSTANCE_ID);
+sendReady();
+
+// -- Initialization --------------------------------------------------------
+
+async function initInference(requestedBackend: string): Promise<void> {
+  const t0 = performance.now();
+  console.log('[InferenceRuntime] context=offscreen');
+  console.log('[InferenceRuntime] requestedBackend=' + requestedBackend);
+
+  // Offscreen documents support Workers + dynamic import() fully.
+  // loadProductionModels() reads chrome.storage.local backend override,
+  // detects GPU capability, and loads all 4 ORT InferenceSession instances.
+  const models = await loadProductionModels();
+
+  _backend = models.backend;
+  console.log('[InferenceRuntime] selectedBackend=' + _backend);
+
+  _pipeline = new PerceptionPipeline();
+  _pipeline.registerOnnxModels(models);
+  _loadedModels = models;
+  _isReady = true;
+
+  const initMs = Math.round(performance.now() - t0);
+  console.log('[InferenceRuntime] All 4 models ready in ' + initMs + 'ms');
+
+  const result: InferenceInitResult = {
+    type: 'INFERENCE_INIT_RESULT',
+    success: true,
+    backend: _backend,
+    initMs,
+  };
+  chrome.runtime.sendMessage(result);
+}
+
+// -- PNG decode ------------------------------------------------------------
+
+async function decodeImageDataUrl(
+  imageDataUrl: string,
+  width: number,
+  height: number,
+): Promise<{ imageData: ImageData; decodeMs: number }> {
+  const t0 = performance.now();
+  const resp = await fetch(imageDataUrl);
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(width || bitmap.width, height || bitmap.height);
+  const ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return { imageData, decodeMs: Math.round(performance.now() - t0) };
+}
+
+// -- Inference run ---------------------------------------------------------
+
+async function runInference(msg: InferenceRunMessage): Promise<void> {
+  const t0 = performance.now();
+
+  if (!_isReady || !_pipeline) {
+    chrome.runtime.sendMessage({
+      type: 'INFERENCE_ERROR',
+      error: 'Offscreen inference runtime not initialized (INFERENCE_INIT not yet complete)',
+      failClosed: true,
+    });
+    return;
+  }
+
+  try {
+    const { imageData, decodeMs } = await decodeImageDataUrl(
+      msg.imageDataUrl, msg.captureWidth, msg.captureHeight,
+    );
+    console.log('[InferenceRuntime] PNG decoded: ' +
+      imageData.width + 'x' + imageData.height + ' decodeMs=' + decodeMs);
+
+    const inferenceStart = performance.now();
+    const perceptionResult = await _pipeline.run(
+      imageData,
+      msg.changedTiles,
+      msg.observationId,
+      msg.frameId,
+      msg.documentGeneration,
+      msg.canvasContext,
+    );
+    const inferenceMs = Math.round(performance.now() - inferenceStart);
+    const totalMs = Math.round(performance.now() - t0);
+
+    console.log('[InferenceRuntime] Inference complete: inferenceMs=' +
+      inferenceMs + ' totalMs=' + totalMs);
+
+    const result: InferenceResult = {
+      type: 'INFERENCE_RESULT',
+      result: perceptionResult,
+      backend: _backend,
+      transferDecodeMs: decodeMs,
+      inferenceMs,
+      totalMs,
+    };
+    assertInferenceResultTrustBoundary(result);
+    chrome.runtime.sendMessage(result);
+  } catch (err: any) {
+    console.error('[InferenceRuntime] Inference failed:', err);
+    chrome.runtime.sendMessage({
+      type: 'INFERENCE_ERROR',
+      error: err?.message ?? String(err),
+      failClosed: true,
+    });
+  }
+}

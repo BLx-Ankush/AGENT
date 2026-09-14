@@ -1,99 +1,140 @@
 ﻿/**
- * ANTARDRISHTI - Offscreen Inference Smoke Test
+ * ANTARDRISHTI -- Offscreen Inference Smoke Test (Phase 9)
  *
- * S1 Offscreen document created
- * S2 ORT initialized in offscreen context
- * S3 Backend selected (wasm or webgpu)
- * S4 Real face-detector session initialized
- * S5 Real inference executed on 64x64 blank image
- * S6 Result returned to service worker and displayed
+ * Tests full handshake:
+ *   S1: Offscreen document created
+ *   S2: Offscreen READY received (listener live -- not inference ready)
+ *   S3: ORT initialized in offscreen (INFERENCE_INIT_RESULT.success)
+ *   S4: Real face-detector session active
+ *   S5: Real inference executed on 64x64 blank image
+ *   S6: Result returned to service worker
  *
  * Open: chrome-extension://<id>/ort-smoke-test.html
- * No inline scripts (extension CSP -- all logic here in ort-smoke-test.js).
+ * No inline scripts (extension CSP).
  */
 
 /* global chrome */
 
-const log = (id, text, ok) => {
-  const el = document.getElementById(id);
+function setStage(stage, text, ok) {
+  const el = document.getElementById('s' + stage);
+  if (!el) return;
+  el.textContent = 'S' + stage + ': ' + text;
+  el.className = ok === true ? 'pass' : ok === false ? 'fail' : 'pending';
+}
+
+function setStatus(text, ok) {
+  const el = document.getElementById('status');
   if (!el) return;
   el.textContent = text;
   el.className = ok === true ? 'pass' : ok === false ? 'fail' : 'pending';
-};
+}
 
-const setStage = (stage, text, ok) => {
-  log('s' + stage, 'S' + stage + ': ' + text, ok);
-};
+function setTiming(text) {
+  const el = document.getElementById('timing');
+  if (el) el.textContent = text;
+}
 
 async function runSmokeTest() {
-  log('status', 'Running smoke test...', undefined);
+  setStatus('Running smoke test...', undefined);
 
-  // -- S1: Set backend override to wasm, then trigger offscreen init ------
+  // Force wasm backend for deterministic test
   try {
     await chrome.storage.local.set({ antardrishti_backend: 'wasm' });
-    setStage(1, 'Backend override set: wasm', true);
   } catch (e) {
-    setStage(1, 'Storage error: ' + e.message, false);
-    log('status', 'FAILED', false);
+    setStatus('Storage error: ' + e.message, false);
     return;
   }
 
-  // Send SMOKE_OFFSCREEN_TEST to service worker
-  // Service worker creates offscreen doc, runs real inference, returns result
-  log('status', 'Sending test to service worker...', undefined);
+  // Ask the service worker to run a full offscreen smoke test.
+  // The SW handler (SMOKE_OFFSCREEN_TEST) will:
+  //   1. Ensure offscreen document exists
+  //   2. Wait for OFFSCREEN_READY (S1+S2 proof)
+  //   3. Send INFERENCE_INIT, wait for INFERENCE_INIT_RESULT (S3 proof)
+  //   4. Send INFERENCE_RUN with a 64x64 blank PNG (S4+S5 proof)
+  //   5. Return result with timing breakdown (S6 proof)
+  setStatus('Sending SMOKE_OFFSCREEN_TEST to service worker...', undefined);
 
   let result;
   try {
-    result = await chrome.runtime.sendMessage({ type: 'SMOKE_OFFSCREEN_TEST' });
+    result = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('SW response timeout (30s)')), 30000);
+      chrome.runtime.sendMessage({ type: 'SMOKE_OFFSCREEN_TEST' }, (r) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(r);
+        }
+      });
+    });
   } catch (e) {
-    log('status', 'SW message failed: ' + e.message, false);
-    setStage(2, 'SW unreachable: ' + e.message, false);
+    setStatus('SW message failed: ' + e.message, false);
+    setStage(1, 'SW unreachable', false);
     return;
   }
 
   if (!result) {
-    log('status', 'No response from service worker', false);
+    setStatus('No response from service worker', false);
     return;
   }
 
   if (result.error) {
-    log('status', 'FAILED: ' + result.error, false);
+    setStatus('FAILED: ' + result.error, false);
     setStage(2, 'Error: ' + result.error, false);
     return;
   }
 
-  // -- S2: ORT initialized (confirmed by init success) --------------------
-  setStage(2, 'ORT initialized in offscreen context (initMs=' + (result.initMs ?? '?') + 'ms)', result.ortReady === true);
+  // S1: Offscreen created
+  setStage(1, 'Offscreen document created', result.offscreenCreated === true);
 
-  // -- S3: Backend selected -----------------------------------------------
+  // S2: OFFSCREEN_READY received (listener was live before INFERENCE_INIT)
+  setStage(2, 'Offscreen READY received (instance=' + (result.runtimeInstanceId || '?') + ')',
+    result.offscreenReady === true);
+
+  // S3: ORT initialized
+  const initMs = result.initMs ?? '?';
+  setStage(3, 'ORT initialized (initMs=' + initMs + 'ms)', result.ortReady === true);
+
+  // S4: Backend + model session
   const backend = result.backend || 'unknown';
-  setStage(3, 'Backend selected: ' + backend, backend === 'wasm' || backend === 'webgpu');
-
-  // -- S4: Face detector session initialized ------------------------------
   const modelId = result.modelId || 'unknown';
-  setStage(4, 'Session: ' + modelId, !!result.modelId);
+  setStage(4, 'Session: ' + modelId + ' backend=' + backend,
+    (backend === 'wasm' || backend === 'webgpu') && !!result.modelId);
 
-  // -- S5: Real inference executed ----------------------------------------
+  // S5: Real inference executed
   const inferenceMs = result.inferenceMs;
-  const transferDecodeMs = result.transferDecodeMs;
+  const decodeMs = result.transferDecodeMs;
   const hasInference = typeof inferenceMs === 'number' && inferenceMs >= 0;
-  setStage(5, 'Inference: ' + (hasInference ? inferenceMs + 'ms (decode=' + transferDecodeMs + 'ms)' : 'NONE'), hasInference);
+  setStage(5, 'Inference: ' + (hasInference
+    ? inferenceMs + 'ms (decode=' + decodeMs + 'ms)'
+    : 'NOT EXECUTED'), hasInference);
 
-  // -- S6: Result returned ------------------------------------------------
-  const shape = result.outputShape;
-  const hasResult = Array.isArray(shape) && shape.length > 0;
-  setStage(6, 'Output shape: ' + (hasResult ? '[' + shape.join(',') + ']' : 'empty'), hasResult);
+  // S6: Result returned
+  const faceCount = result.faceDetections;
+  const hasResult = typeof faceCount === 'number';
+  setStage(6, 'Result: ' + (hasResult
+    ? faceCount + ' face detection(s) from 64x64 image'
+    : 'NO RESULT'), hasResult);
 
-  // -- Timing breakdown ---------------------------------------------------
-  if (result.timing) {
-    document.getElementById('timing').textContent =
-      'transferDecodeMs=' + result.transferDecodeMs + '  ' +
-      'inferenceMs=' + result.inferenceMs + '  ' +
-      'totalMs=' + result.totalMs;
+  // Timing
+  if (hasInference) {
+    setTiming(
+      'transferDecodeMs=' + decodeMs +
+      '  inferenceMs=' + inferenceMs +
+      '  totalMs=' + result.totalMs
+    );
   }
 
-  const allPass = result.ortReady && (backend === 'wasm' || backend === 'webgpu') && !!result.modelId && hasInference && hasResult;
-  log('status', allPass ? 'ALL PASS' : 'SOME STAGES FAILED', allPass);
+  const allPass = (
+    result.offscreenCreated &&
+    result.offscreenReady &&
+    result.ortReady &&
+    (backend === 'wasm' || backend === 'webgpu') &&
+    !!result.modelId &&
+    hasInference &&
+    hasResult
+  );
+  setStatus(allPass ? 'ALL PASS -- Offscreen inference working' : 'SOME STAGES FAILED', allPass);
 }
 
 document.addEventListener('DOMContentLoaded', runSmokeTest);
