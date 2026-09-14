@@ -155,9 +155,12 @@ export class Coordinator {
 
   /**
    * Pending inference: resolves/rejects when INFERENCE_RESULT/ERROR arrives.
+   * Resolves with the full InferenceResult (including timing fields).
+   * Consumers extract .result for PerceptionResult and .transferDecodeMs,
+   * .inferenceMs, .totalMs for timing instrumentation.
    */
   private _pendingInference: {
-    resolve: (result: PerceptionResult) => void;
+    resolve: (result: InferenceResult) => void;
     reject: (err: Error) => void;
   } | null = null;
 
@@ -580,7 +583,7 @@ export class Coordinator {
         inferenceMs: ir.inferenceMs,
         totalMs: ir.totalMs,
       });
-      this._pendingInference?.resolve(ir.result);
+      this._pendingInference?.resolve(ir);
       this._pendingInference = null;
       return;
     }
@@ -716,7 +719,7 @@ export class Coordinator {
         // Chrome offscreen path: send PNG data URL to offscreen document.
         // The string is passed as-is -- not serialized as bytes.
         // Offscreen decodes via createImageBitmap + OffscreenCanvas.
-        perceptionResult = await new Promise<PerceptionResult>((resolve, reject) => {
+        const offscreenResult = await new Promise<InferenceResult>((resolve, reject) => {
           this._pendingInference = { resolve, reject };
           const msg: InferenceRunMessage = {
             type: 'INFERENCE_RUN',
@@ -730,6 +733,12 @@ export class Coordinator {
             captureHeight: captureResult.height,
           };
           chrome.runtime.sendMessage(msg);
+        });
+        perceptionResult = offscreenResult.result;
+        console.log('[Coordinator] Offscreen inference timing:', {
+          transferDecodeMs: offscreenResult.transferDecodeMs,
+          inferenceMs: offscreenResult.inferenceMs,
+          totalMs: offscreenResult.totalMs,
         });
       }
 
@@ -1546,8 +1555,27 @@ export class Coordinator {
             }
           }, 120000);
         });
-        console.log('[Coordinator] SMOKE S5+S6: inference complete faces=' +
-          (inferenceResult?.faceDetections?.length ?? 0));
+        // inferenceResult is now a full InferenceResult with timing fields.
+        const ir = inferenceResult as InferenceResult;
+        const perceptionResult = ir.result;
+        const faceCount = perceptionResult?.faceDetections?.length ?? 0;
+
+        console.log('[Coordinator] SMOKE S5+S6: inference complete' +
+          ' faces=' + faceCount +
+          ' transferDecodeMs=' + ir.transferDecodeMs +
+          ' inferenceMs=' + ir.inferenceMs +
+          ' totalMs=' + ir.totalMs);
+
+        // Validate timing — if real inference ran, inferenceMs must be > 0.
+        // A 0ms inference on a real ONNX model is physically impossible.
+        if (typeof ir.inferenceMs !== 'number' || ir.inferenceMs <= 0) {
+          throw new Error(
+            'Smoke S5 timing invalid: inferenceMs=' + ir.inferenceMs +
+            ' (expected > 0 from real ONNX session.run())'
+          );
+        }
+
+        const totalSmokeMs = Math.round(performance.now() - initT0);
 
         sendResponse({
           success: true,
@@ -1555,14 +1583,20 @@ export class Coordinator {
           offscreenReady: offscreenReadyReceived,
           runtimeInstanceId,
           ortReady: true,
-          backend: this._backend,
+          backend: ir.backend ?? this._backend,
           modelId: 'face-detector-v1',
           initMs,
-          transferDecodeMs: inferenceResult?.transferDecodeMs ?? 0,
-          inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? inferenceResult?.inferenceMs ?? 0,
-          totalMs: inferenceResult?.totalMs ?? initMs,
-          faceDetections: inferenceResult?.faceDetections?.length ?? 0,
-          timing: { initMs },
+          transferDecodeMs: ir.transferDecodeMs,
+          inferenceMs: ir.inferenceMs,
+          totalMs: totalSmokeMs,
+          faceDetections: faceCount,
+          timing: {
+            initMs,
+            transferDecodeMs: ir.transferDecodeMs,
+            inferenceMs: ir.inferenceMs,
+            offscreenTotalMs: ir.totalMs,
+            smokeWallClockMs: totalSmokeMs,
+          },
         });
       } catch (e) {
         const err = e as Error;
