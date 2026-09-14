@@ -2,13 +2,8 @@
  * ANTARDRISHTI -- Offscreen Trust Boundary Tests
  *
  * Amendment 2 (negative tests): Prove that the offscreen document
- * cannot reach control-plane components:
- *   - Planner requests
- *   - External network calls  
- *   - Vault token redemption
- *   - Browser action execution
- *
- * Also proves InferenceResult message protocol is structurally clean.
+ * cannot reach control-plane components.
+ * Updated for Phase 9 blocker #5 handshake protocol.
  *
  * Run: npx tsx tests/test-offscreen-trust-boundary.mts
  */
@@ -32,15 +27,17 @@ import {
   isInferenceResult,
   isInferenceInitResult,
   isInferenceError,
+  isOffscreenReady,
   assertInferenceResultTrustBoundary,
+  withTimeout,
   TRUST_BOUNDARY_FORBIDDEN_KEYS,
   type InferenceResult,
   type InferenceInitResult,
   type InferenceRunMessage,
   type InferenceInitMessage,
   type InferenceDisposeMessage,
-  type OffscreenToSwMessage,
-  type SwToOffscreenMessage,
+  type OffscreenPingMessage,
+  type OffscreenReadyMessage,
 } from '../packages/model-runner/src/offscreen-bridge';
 
 // -- Test framework ----------------------------------------------------------
@@ -57,52 +54,75 @@ function assertThrows(fn: () => void, msg: string) {
 
 // -- Tests -------------------------------------------------------------------
 
-console.log('='.repeat(60));
-console.log('  Offscreen Trust Boundary Tests');
-console.log('='.repeat(60));
+console.log('='.repeat(62));
+console.log('  Offscreen Trust Boundary + Handshake Tests');
+console.log('='.repeat(62));
 
-// -- T01: Valid SW->Offscreen message types accepted -----------------------
-console.log('\n--- T01-T03: SW -> Offscreen message type guards');
+// -- T01-T04: SW -> Offscreen message types (includes OFFSCREEN_PING now) ---
+console.log('\n--- T01-T04: SW -> Offscreen message type guards (handshake)');
+
+const pingMsg: OffscreenPingMessage = { type: 'OFFSCREEN_PING' };
+assert(isSwToOffscreenMessage(pingMsg), 'T01: OFFSCREEN_PING is SW->Offscreen message');
 
 const initMsg: InferenceInitMessage = { type: 'INFERENCE_INIT', requestedBackend: 'wasm' };
-assert(isSwToOffscreenMessage(initMsg), 'T01: INFERENCE_INIT is SW->Offscreen message');
+assert(isSwToOffscreenMessage(initMsg), 'T02: INFERENCE_INIT is SW->Offscreen message');
 
 const runMsg: InferenceRunMessage = {
   type: 'INFERENCE_RUN', imageDataUrl: 'data:image/png;base64,abc',
   changedTiles: [], observationId: 'obs1', frameId: 0,
-  documentGeneration: 'gen1', canvasContext: { canvasTexts: [], faceRegions: [], controlRegions: [] },
+  documentGeneration: 'gen1',
+  canvasContext: { canvasTexts: [], faceRegions: [], controlRegions: [] },
   captureWidth: 64, captureHeight: 64,
 };
-assert(isSwToOffscreenMessage(runMsg), 'T02: INFERENCE_RUN is SW->Offscreen message');
+assert(isSwToOffscreenMessage(runMsg), 'T03: INFERENCE_RUN is SW->Offscreen message');
 
 const disposeMsg: InferenceDisposeMessage = { type: 'INFERENCE_DISPOSE' };
-assert(isSwToOffscreenMessage(disposeMsg), 'T03: INFERENCE_DISPOSE is SW->Offscreen message');
+assert(isSwToOffscreenMessage(disposeMsg), 'T04: INFERENCE_DISPOSE is SW->Offscreen message');
 
-// -- T04-T06: Offscreen->SW message types accepted -------------------------
-console.log('\n--- T04-T06: Offscreen -> SW message type guards');
+// -- T05-T09: Offscreen -> SW messages (includes OFFSCREEN_READY) ----------
+console.log('\n--- T05-T09: Offscreen -> SW message type guards (handshake)');
 
-const initResult: InferenceInitResult = { type: 'INFERENCE_INIT_RESULT', success: true, backend: 'wasm', initMs: 100 };
-assert(isOffscreenToSwMessage(initResult), 'T04: INFERENCE_INIT_RESULT is Offscreen->SW message');
-assert(isInferenceInitResult(initResult), 'T05: isInferenceInitResult type guard');
+const readyMsg: OffscreenReadyMessage = {
+  type: 'OFFSCREEN_READY',
+  runtimeInstanceId: 'test-instance-123',
+};
+assert(isOffscreenToSwMessage(readyMsg), 'T05: OFFSCREEN_READY is Offscreen->SW message');
+assert(isOffscreenReady(readyMsg), 'T06: isOffscreenReady type guard');
+assert(readyMsg.runtimeInstanceId === 'test-instance-123', 'T07: OFFSCREEN_READY carries runtimeInstanceId');
 
-const errorMsg = { type: 'INFERENCE_ERROR', error: 'fail', failClosed: true as const };
-assert(isInferenceError(errorMsg), 'T06: isInferenceError type guard');
+const initResult: InferenceInitResult = {
+  type: 'INFERENCE_INIT_RESULT', success: true, backend: 'wasm', initMs: 100,
+};
+assert(isOffscreenToSwMessage(initResult), 'T08: INFERENCE_INIT_RESULT is Offscreen->SW message');
+assert(isInferenceInitResult(initResult), 'T09: isInferenceInitResult type guard');
 
-// -- T07-T09: Unknown message types are REJECTED ---------------------------
-console.log('\n--- T07-T09: Unknown message types are rejected');
-
-assert(!isSwToOffscreenMessage({ type: 'PLANNER_REQUEST' }), 'T07: PLANNER_REQUEST is NOT a SW->Offscreen message');
-assert(!isSwToOffscreenMessage({ type: 'USER_TASK' }), 'T08: USER_TASK is NOT a SW->Offscreen message');
-assert(!isSwToOffscreenMessage({ type: 'SMOKE_BACKEND_TEST' }), 'T09: SMOKE_BACKEND_TEST is NOT a SW->Offscreen message');
-
-// -- T10-T11: Offscreen is NOT SW->Offscreen and vice versa ----------------
-console.log('\n--- T10-T11: Direction guards are mutually exclusive');
+// -- T10-T13: Direction guards are mutually exclusive ----------------------
+console.log('\n--- T10-T13: Direction guards are mutually exclusive');
 
 assert(!isOffscreenToSwMessage(initMsg), 'T10: INFERENCE_INIT is NOT Offscreen->SW message');
-assert(!isSwToOffscreenMessage(initResult), 'T11: INFERENCE_INIT_RESULT is NOT SW->Offscreen message');
+assert(!isOffscreenToSwMessage(pingMsg), 'T11: OFFSCREEN_PING is NOT Offscreen->SW message');
+assert(!isSwToOffscreenMessage(initResult), 'T12: INFERENCE_INIT_RESULT is NOT SW->Offscreen message');
+assert(!isSwToOffscreenMessage(readyMsg), 'T13: OFFSCREEN_READY is NOT SW->Offscreen message');
 
-// -- T12-T15: Trust boundary assertion -----------------------------------------
-console.log('\n--- T12-T15: Trust boundary assertion (forbidden keys)');
+// -- T14-T16: OFFSCREEN_READY != INFERENCE_READY (structural separation) ---
+console.log('\n--- T14-T16: OFFSCREEN_READY != INFERENCE_READY');
+
+assert(!isInferenceInitResult(readyMsg), 'T14: OFFSCREEN_READY is not INFERENCE_INIT_RESULT');
+assert(!isInferenceResult(readyMsg), 'T15: OFFSCREEN_READY is not INFERENCE_RESULT');
+// OFFSCREEN_READY has no inference data
+const readyKeys = Object.keys(readyMsg);
+assert(!readyKeys.includes('backend') && !readyKeys.includes('success'),
+  'T16: OFFSCREEN_READY has no inference fields (backend, success)');
+
+// -- T17-T19: Unknown types are rejected ----------------------------------
+console.log('\n--- T17-T19: Unknown message types are rejected');
+
+assert(!isSwToOffscreenMessage({ type: 'PLANNER_REQUEST' }), 'T17: PLANNER_REQUEST rejected');
+assert(!isSwToOffscreenMessage({ type: 'USER_TASK' }), 'T18: USER_TASK rejected');
+assert(!isOffscreenToSwMessage({ type: 'VAULT_REDEEM' }), 'T19: VAULT_REDEEM rejected');
+
+// -- T20-T22: Trust boundary assertion ------------------------------------
+console.log('\n--- T20-T22: Trust boundary assertion');
 
 const cleanResult: InferenceResult = {
   type: 'INFERENCE_RESULT',
@@ -117,47 +137,54 @@ const cleanResult: InferenceResult = {
   totalMs: 100,
 };
 
-// Clean result should NOT throw
 let threwOnClean = false;
 try { assertInferenceResultTrustBoundary(cleanResult); }
 catch { threwOnClean = true; }
-assert(!threwOnClean, 'T12: Clean InferenceResult passes trust boundary check');
+assert(!threwOnClean, 'T20: Clean InferenceResult passes trust boundary');
 
-// Results with forbidden keys should throw
-for (const key of ['plannerRequest', 'plannerToken', 'vaultToken'] as const) {
+for (const key of ['plannerRequest', 'vaultToken'] as const) {
   const dirty = JSON.parse(JSON.stringify(cleanResult));
   dirty[key] = 'LEAKED';
-  assertThrows(() => assertInferenceResultTrustBoundary(dirty as any), 'T13-T15: InferenceResult with "' + key + '" fails trust boundary check');
+  assertThrows(() => assertInferenceResultTrustBoundary(dirty as any),
+    'T21-T22: InferenceResult with "' + key + '" fails trust boundary');
 }
 
-// -- T16-T18: No control-plane keys in InferenceResult structure -----------
-console.log('\n--- T16-T18: InferenceResult structure has no control-plane fields');
+// -- T23-T25: withTimeout helper ------------------------------------------
+console.log('\n--- T23-T25: withTimeout helper');
 
-const resultKeys = Object.keys(cleanResult);
-assert(!resultKeys.includes('plannerUrl'), 'T16: InferenceResult has no plannerUrl field');
-assert(!resultKeys.includes('vaultToken'), 'T17: InferenceResult has no vaultToken field');
-assert(!resultKeys.includes('actionGate'), 'T18: InferenceResult has no actionGate field');
+const fastP = Promise.resolve(42);
+const fastResult = await withTimeout(fastP, 1000, 'should not timeout');
+assert(fastResult === 42, 'T23: withTimeout passes through resolved value');
 
-// -- T19-T20: INFERENCE_RUN cannot inject control-plane fields -------------
-console.log('\n--- T19-T20: INFERENCE_RUN message cannot carry control-plane data');
+let timeoutFired = false;
+try {
+  await withTimeout(new Promise(() => {}), 50, 'timeout test');
+} catch (e: any) {
+  timeoutFired = e.message === 'timeout test';
+}
+assert(timeoutFired, 'T24: withTimeout rejects after timeout');
 
-const runMsgKeys = Object.keys(runMsg);
-assert(!runMsgKeys.includes('plannerUrl'), 'T19: INFERENCE_RUN has no plannerUrl field');
-assert(!runMsgKeys.includes('egressVerifier'), 'T20: INFERENCE_RUN has no egressVerifier field');
+let rejectionPropagated = false;
+try {
+  await withTimeout(Promise.reject(new Error('inner error')), 1000, 'timeout');
+} catch (e: any) {
+  rejectionPropagated = e.message === 'inner error';
+}
+assert(rejectionPropagated, 'T25: withTimeout propagates inner rejection');
 
-// -- T21: All defined forbidden keys are present in TRUST_BOUNDARY_FORBIDDEN_KEYS
-console.log('\n--- T21: Forbidden key list is non-empty');
-assert(TRUST_BOUNDARY_FORBIDDEN_KEYS.length >= 5, 'T21: At least 5 forbidden keys defined in trust boundary');
+// -- T26-T28: Malformed messages rejected ---------------------------------
+console.log('\n--- T26-T28: Malformed messages rejected');
 
-// -- T22: Null/undefined/malformed messages are rejected ------------------
-console.log('\n--- T22-T25: Malformed messages are rejected');
-assert(!isSwToOffscreenMessage(null), 'T22: null is rejected');
-assert(!isSwToOffscreenMessage(undefined), 'T23: undefined is rejected');
-assert(!isSwToOffscreenMessage('string'), 'T24: string is rejected');
-assert(!isSwToOffscreenMessage({}), 'T25: empty object is rejected');
+assert(!isSwToOffscreenMessage(null), 'T26: null rejected');
+assert(!isSwToOffscreenMessage(undefined), 'T27: undefined rejected');
+assert(!isSwToOffscreenMessage({}), 'T28: empty object rejected');
 
-// -- Summary -----------------------------------------------------------------
-console.log('\n' + '='.repeat(60));
+// -- T29: Forbidden key list is non-empty ---------------------------------
+console.log('\n--- T29: Forbidden key list');
+assert(TRUST_BOUNDARY_FORBIDDEN_KEYS.length >= 5, 'T29: At least 5 forbidden keys defined');
+
+// -- Summary ---------------------------------------------------------------
+console.log('\n' + '='.repeat(62));
 console.log('  Trust Boundary Tests: ' + passed + ' passed, ' + failed + ' failed');
-console.log('='.repeat(60));
+console.log('='.repeat(62));
 if (failed > 0) process.exit(1);

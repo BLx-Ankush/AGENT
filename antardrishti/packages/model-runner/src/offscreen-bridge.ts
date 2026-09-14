@@ -1,29 +1,40 @@
-/**
- * ANTARDRISHTI — Offscreen Inference Bridge
+﻿/**
+ * ANTARDRISHTI -- Offscreen Inference Bridge
  *
- * Typed message protocol for the service-worker ↔ offscreen-document
- * inference channel. No Chrome API dependency — fully testable in Node.js.
+ * Typed message protocol for the service-worker <-> offscreen-document
+ * inference channel. No Chrome API dependency -- fully testable in Node.js.
  *
- * Message flow:
+ * Full startup handshake (Phase 9, blocker #5 fix):
  *
  *   SERVICE WORKER                    OFFSCREEN DOCUMENT
- *   ─────────────────                 ──────────────────────────────
- *   INFERENCE_INIT           ───→     load models + ORT
- *                            ←───     INFERENCE_INIT_RESULT
+ *   ──────────────────────────────    ───────────────────────────────
+ *   createDocument()
+ *                                     (script loads, listener registered)
+ *                            <───     OFFSCREEN_READY { runtimeInstanceId }
+ *   [Coordinator] Offscreen READY received
+ *   INFERENCE_INIT           ───>     loadProductionModels()
+ *                            <───     INFERENCE_INIT_RESULT { backend, initMs }
+ *   [Coordinator] Perception ready
  *
- *   INFERENCE_RUN            ───→     decode PNG → pipeline.run()
- *                            ←───     INFERENCE_RESULT
+ *   INFERENCE_RUN            ───>     decode PNG -> pipeline.run()
+ *                            <───     INFERENCE_RESULT { result, timing }
  *
- *   INFERENCE_DISPOSE        ───→     dispose models
+ *   INFERENCE_DISPOSE        ───>     disposeModels()
  *
- * ImageData is NOT serialized as bytes. The service worker sends the
- * existing captureResult.imageDataUrl (PNG data URL string). The offscreen
- * document decodes it via createImageBitmap() + OffscreenCanvas. This
- * avoids the O(W×H×4) byte expansion that would exceed Chrome's 64 MiB
- * message size limit for high-resolution captures.
+ *   OFFSCREEN_PING           ───>     (if document already exists)
+ *                            <───     OFFSCREEN_READY { runtimeInstanceId }
+ *
+ * OFFSCREEN_READY vs INFERENCE_READY:
+ *   OFFSCREEN_READY = listener registered, ready to receive INFERENCE_INIT
+ *   INFERENCE_READY = all 4 ONNX models loaded, inference can run
+ *   These are SEPARATE states. Do NOT conflate them.
+ *
+ * ImageData transfer:
+ *   PNG data URL (string) is sent as-is. Offscreen decodes via
+ *   createImageBitmap() + OffscreenCanvas. Never serialized as bytes.
  *
  * Trust boundary:
- *   The offscreen document is a computation-only component. It MUST NOT:
+ *   Offscreen document MUST NOT:
  *     - send planner requests
  *     - perform external network requests
  *     - redeem vault tokens
@@ -34,18 +45,13 @@
 import type {
   BackendRequest,
   CanvasRegionData,
-  FaceDetection,
-  InferenceMetrics,
-  OcrResult,
-  SemanticRegion,
-  TextRegion,
 } from './types';
-import type { PerceptionResult, VisualGrounding } from './pipeline';
+import type { PerceptionResult } from './pipeline';
 
-// ── Re-export for consumers of this module ─────────────────────────────────
+// -- Re-export for consumers ------------------------------------------------
 export type { CanvasRegionData };
 
-// ── Tile rectangle ──────────────────────────────────────────────────────────
+// -- Tile rectangle --------------------------------------------------------
 
 export interface TileRect {
   x: number;
@@ -54,58 +60,31 @@ export interface TileRect {
   h: number;
 }
 
-// ── Serialized PerceptionResult ─────────────────────────────────────────────
-// PerceptionResult contains only plain objects (no TypedArrays, no class
-// instances) so chrome.runtime.sendMessage can structured-clone it directly.
+// -- Serialized PerceptionResult --------------------------------------------
+// PerceptionResult contains only plain objects so structured-clone works.
 
 export type SerializedPerceptionResult = PerceptionResult;
 
-// ── Message types: SERVICE WORKER → OFFSCREEN ──────────────────────────────
+// ==========================================================================
+// MESSAGE TYPES: OFFSCREEN -> SERVICE WORKER (sent first in handshake)
+// ==========================================================================
 
 /**
- * Sent once at startup. Offscreen loads all 4 models and responds
- * with INFERENCE_INIT_RESULT.
+ * Sent by the offscreen document immediately after its message listener
+ * is registered. Proves the listener is live before INFERENCE_INIT arrives.
+ *
+ * Also sent in response to OFFSCREEN_PING when the document already exists.
+ *
+ * runtimeInstanceId: unique per-load instance (crypto.randomUUID()).
+ *   Allows the service worker to detect stale / reloaded documents.
+ *
+ * OFFSCREEN_READY !== inference ready.
+ * The offscreen document is not yet initialized for inference at this point.
  */
-export interface InferenceInitMessage {
-  type: 'INFERENCE_INIT';
-  /** Backend preference from chrome.storage.local or 'auto' */
-  requestedBackend: BackendRequest;
+export interface OffscreenReadyMessage {
+  type: 'OFFSCREEN_READY';
+  runtimeInstanceId: string;
 }
-
-/**
- * Sent for each perception run. Offscreen decodes PNG, runs pipeline,
- * responds with INFERENCE_RESULT.
- */
-export interface InferenceRunMessage {
-  type: 'INFERENCE_RUN';
-  /**
-   * PNG data URL from captureVisibleTab (existing field).
-   * Offscreen decodes via createImageBitmap() → OffscreenCanvas → ImageData.
-   * Never serialized as RGBA byte array.
-   */
-  imageDataUrl: string;
-  changedTiles: TileRect[];
-  observationId: string;
-  frameId: number;
-  documentGeneration: string;
-  canvasContext: CanvasRegionData;
-  /** Width of the full capture (px) */
-  captureWidth: number;
-  /** Height of the full capture (px) */
-  captureHeight: number;
-}
-
-/** Sent when service worker shuts down or extension is reloaded. */
-export interface InferenceDisposeMessage {
-  type: 'INFERENCE_DISPOSE';
-}
-
-export type SwToOffscreenMessage =
-  | InferenceInitMessage
-  | InferenceRunMessage
-  | InferenceDisposeMessage;
-
-// ── Message types: OFFSCREEN → SERVICE WORKER ──────────────────────────────
 
 /**
  * Response to INFERENCE_INIT. Contains selected backend and init timing.
@@ -125,9 +104,9 @@ export interface InferenceInitResult {
  * Response to INFERENCE_RUN.
  *
  * Timing breakdown (amendment 4):
- *   transferDecodeMs  — message arrival → ImageData ready (PNG decode)
- *   inferenceMs       — pure ORT inference time across all 4 models
- *   totalMs           — total from message receipt to response sent
+ *   transferDecodeMs  -- message arrival -> ImageData ready (PNG decode)
+ *   inferenceMs       -- pure ORT inference time across all 4 models
+ *   totalMs           -- total from message receipt to response sent
  */
 export interface InferenceResult {
   type: 'INFERENCE_RESULT';
@@ -152,26 +131,95 @@ export interface InferenceErrorMessage {
 }
 
 export type OffscreenToSwMessage =
+  | OffscreenReadyMessage
   | InferenceInitResult
   | InferenceResult
   | InferenceErrorMessage;
 
-// ── Type guards ─────────────────────────────────────────────────────────────
+// ==========================================================================
+// MESSAGE TYPES: SERVICE WORKER -> OFFSCREEN
+// ==========================================================================
+
+/**
+ * Sent once at startup. Offscreen loads all 4 models and responds
+ * with INFERENCE_INIT_RESULT.
+ * Only sent AFTER OFFSCREEN_READY is received.
+ */
+export interface InferenceInitMessage {
+  type: 'INFERENCE_INIT';
+  /** Backend preference from chrome.storage.local or 'auto' */
+  requestedBackend: BackendRequest;
+}
+
+/**
+ * Sent when the service worker suspects the offscreen document may already
+ * exist (hasDocument = true) but doesn't know if its listener is ready.
+ * Offscreen responds with OFFSCREEN_READY.
+ */
+export interface OffscreenPingMessage {
+  type: 'OFFSCREEN_PING';
+}
+
+/**
+ * Sent for each perception run. Offscreen decodes PNG, runs pipeline,
+ * responds with INFERENCE_RESULT.
+ */
+export interface InferenceRunMessage {
+  type: 'INFERENCE_RUN';
+  /**
+   * PNG data URL from captureVisibleTab (existing field).
+   * Offscreen decodes via createImageBitmap() -> OffscreenCanvas -> ImageData.
+   * Never serialized as RGBA byte array.
+   */
+  imageDataUrl: string;
+  changedTiles: TileRect[];
+  observationId: string;
+  frameId: number;
+  documentGeneration: string;
+  canvasContext: CanvasRegionData;
+  /** Width of the full capture (px) */
+  captureWidth: number;
+  /** Height of the full capture (px) */
+  captureHeight: number;
+}
+
+/** Sent when service worker shuts down or extension is reloaded. */
+export interface InferenceDisposeMessage {
+  type: 'INFERENCE_DISPOSE';
+}
+
+export type SwToOffscreenMessage =
+  | OffscreenPingMessage
+  | InferenceInitMessage
+  | InferenceRunMessage
+  | InferenceDisposeMessage;
+
+// -- Type guards -----------------------------------------------------------
 
 export function isSwToOffscreenMessage(msg: unknown): msg is SwToOffscreenMessage {
   if (typeof msg !== 'object' || msg === null) return false;
   const t = (msg as any).type;
-  return t === 'INFERENCE_INIT' || t === 'INFERENCE_RUN' || t === 'INFERENCE_DISPOSE';
+  return (
+    t === 'OFFSCREEN_PING' ||
+    t === 'INFERENCE_INIT' ||
+    t === 'INFERENCE_RUN' ||
+    t === 'INFERENCE_DISPOSE'
+  );
 }
 
 export function isOffscreenToSwMessage(msg: unknown): msg is OffscreenToSwMessage {
   if (typeof msg !== 'object' || msg === null) return false;
   const t = (msg as any).type;
   return (
+    t === 'OFFSCREEN_READY' ||
     t === 'INFERENCE_INIT_RESULT' ||
     t === 'INFERENCE_RESULT' ||
     t === 'INFERENCE_ERROR'
   );
+}
+
+export function isOffscreenReady(msg: unknown): msg is OffscreenReadyMessage {
+  return typeof msg === 'object' && msg !== null && (msg as any).type === 'OFFSCREEN_READY';
 }
 
 export function isInferenceResult(msg: unknown): msg is InferenceResult {
@@ -186,7 +234,7 @@ export function isInferenceError(msg: unknown): msg is InferenceErrorMessage {
   return typeof msg === 'object' && msg !== null && (msg as any).type === 'INFERENCE_ERROR';
 }
 
-// ── Trust boundary helpers ───────────────────────────────────────────────────
+// -- Trust boundary helpers ------------------------------------------------
 
 /**
  * Keys that MUST NOT appear in any INFERENCE_RESULT payload.
@@ -208,11 +256,31 @@ export const TRUST_BOUNDARY_FORBIDDEN_KEYS = [
 export function assertInferenceResultTrustBoundary(result: InferenceResult): void {
   const payload = JSON.stringify(result);
   for (const key of TRUST_BOUNDARY_FORBIDDEN_KEYS) {
-    if (payload.includes(`"${key}"`)) {
+    if (payload.includes('"' + key + '"')) {
       throw new Error(
-        `[TrustBoundary] InferenceResult contains forbidden key: "${key}". ` +
+        '[TrustBoundary] InferenceResult contains forbidden key: "' + key + '". ' +
         'Offscreen document may not contain control-plane data.',
       );
     }
   }
+}
+
+// -- Timeout helper --------------------------------------------------------
+
+/**
+ * Wraps a promise with a timeout. Rejects with the given message if the
+ * promise does not settle within timeoutMs.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
 }
