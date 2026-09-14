@@ -3,21 +3,38 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ANTARDRISHTI — ORT WASM Smoke Test</title>
+  <title>ANTARDRISHTI -- ORT Smoke Test</title>
   <link rel="stylesheet" href="ort-smoke-test.css">
 </head>
 <body>
   <header>
     <h1>ANTARDRISHTI ORT Smoke Test</h1>
-    <p class="subtitle">Chrome MV3 · WASM backend · onnxruntime-web 1.29.0</p>
+    <p class="subtitle">Chrome MV3 &bull; WASM backend &bull; Offscreen Inference &bull; onnxruntime-web 1.29.0</p>
   </header>
 
   <main>
+    <!-- Overall status banner -- updated by setStatus() -->
+    <section class="status-card" aria-label="Overall test status">
+      <div id="status" class="pending" role="status" aria-live="polite">Waiting for service worker...</div>
+      <div id="timing" class="timing"></div>
+    </section>
+
+    <!-- S1-S6 stage results -- updated by setStage(n, text, ok) -->
+    <section class="stages" aria-label="Handshake stages">
+      <div id="s1" class="pending" role="status">S1: Pending -- Offscreen document created</div>
+      <div id="s2" class="pending" role="status">S2: Pending -- Offscreen READY received</div>
+      <div id="s3" class="pending" role="status">S3: Pending -- ORT initialized</div>
+      <div id="s4" class="pending" role="status">S4: Pending -- Model session active</div>
+      <div id="s5" class="pending" role="status">S5: Pending -- Real inference executed</div>
+      <div id="s6" class="pending" role="status">S6: Pending -- Result returned to SW</div>
+    </section>
+
+    <!-- Free-form log and summary (retained from original) -->
     <div class="log" id="log" aria-label="Test output log" role="log"></div>
     <div class="summary" id="summary" aria-live="polite"></div>
   </main>
 
-  <!-- External script only — no inline JS (extension CSP: script-src 'self') -->
+  <!-- External script only -- no inline JS (extension CSP: script-src 'self') -->
   <script src="ort-smoke-test.js"></script>
 </body>
 </html>
