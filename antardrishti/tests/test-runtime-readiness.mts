@@ -20,7 +20,8 @@ import { resolve, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MODELS_DIR = resolve(__dirname, '../apps/extension/assets/models');
+const ASSETS_DIR  = resolve(__dirname, '../apps/extension/assets');
+const MODELS_DIR  = resolve(ASSETS_DIR, 'models');
 
 // ── Chrome extension API shims ────────────────────────────────
 // OnnxSession.loadModelBytes() calls:
@@ -30,9 +31,10 @@ const MODELS_DIR = resolve(__dirname, '../apps/extension/assets/models');
 (globalThis as any).chrome = {
   runtime: {
     getURL: (path: string) => {
-      // path is e.g. "models/text-detector.onnx"
-      const filename = path.replace(/^models\//, '');
-      return `file://${join(MODELS_DIR, filename).replace(/\\/g, '/')}`;
+      // Resolve any path relative to the extension assets/ directory.
+      // e.g. 'models/text-detector.onnx' → assets/models/text-detector.onnx
+      //      'ort/ort-wasm-simd-threaded.wasm' → assets/ort/ort-wasm-simd-threaded.wasm
+      return `file://${join(ASSETS_DIR, path).replace(/\\/g, '/')}`;
     },
   },
   storage: {

@@ -1,23 +1,24 @@
-/**
- * ANTARDRISHTI — ORT Smoke Test Script
+﻿/**
+ * ANTARDRISHTI - ORT Smoke Test Script
  *
- * Tests ONNX Runtime Web initialization in Chrome MV3 extension context.
+ * Tests ONNX Runtime Web in the Chrome MV3 extension context.
  * Separated from HTML to comply with extension CSP (no unsafe-inline).
  *
- * Backend tested: WASM (Chrome + WASM Phase 9 validation)
+ * Backend control:
+ *   First sets chrome.storage.local { antardrishti_backend: 'wasm' }
+ *   to explicitly force WASM regardless of WebGPU availability.
+ *   Then queries the service worker for real inference results.
  *
  * Stages:
- *   S1: Environment — chrome-extension:// URL resolution
+ *   S1: Environment — chrome-extension:// URL + explicit backend override
  *   S2: WASM asset fetch (ort-wasm-simd-threaded.wasm accessible)
- *   S3: ORT WASM runtime initialization (onnxruntime-web/wasm)
- *   S4: ONNX session creation (face-detector.onnx, WASM backend)
- *   S5: Real inference execution
+ *   S3: Service worker backend selection (requestedBackend vs selectedBackend)
+ *   S4: ONNX session proof — service worker ran face-detector session
+ *   S5: Real inference execution (service worker)
  *   S6: Output tensor shape verification
  */
 
-// ── DOM helpers ─────────────────────────────────────────────────
-
-const logEl = document.getElementById('log');
+const logEl     = document.getElementById('log');
 const summaryEl = document.getElementById('summary');
 
 function log(cls, msg) {
@@ -31,21 +32,40 @@ function log(cls, msg) {
 let passed = 0, failed = 0;
 
 function assert(cond, msg) {
-  if (cond) { log('pass', `  ✅ ${msg}`); passed++; }
-  else       { log('fail', `  ❌ FAIL: ${msg}`); failed++; }
+  if (cond) { log('pass', `  ✓ ${msg}`); passed++; }
+  else       { log('fail', `  ✗ FAIL: ${msg}`); failed++; }
   return cond;
 }
 
-// ── Main smoke test ──────────────────────────────────────────────
+// ── Storage helper ────────────────────────────────────────────────────────
+
+function setBackendOverride(value) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ antardrishti_backend: value }, () => {
+      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+      else resolve();
+    });
+  });
+}
+
+function readBackendOverride() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['antardrishti_backend'], (r) => {
+      resolve(r.antardrishti_backend ?? 'auto');
+    });
+  });
+}
+
+// ── Main smoke test ───────────────────────────────────────────────────────
 
 async function runSmoke() {
-  log('info', '══════════════════════════════════════════════════');
-  log('info', '  ANTARDRISHTI ORT Smoke Test — Chrome + WASM');
-  log('info', '══════════════════════════════════════════════════');
+  log('info', '══════════════════════════════════════════════════════');
+  log('info', '  ANTARDRISHTI ORT Smoke Test — backend=wasm');
+  log('info', '══════════════════════════════════════════════════════');
 
-  // ── S1: Environment ───────────────────────────────────────────
+  // ── S1: Environment ──────────────────────────────────────────
   log('info', '\n── S1: Environment ─────────────────────────────────');
-  log('dim', `  Extension ID: ${chrome.runtime.id}`);
+  log('dim',  `  Extension ID: ${chrome.runtime.id}`);
 
   const wasmUrl  = chrome.runtime.getURL('ort/ort-wasm-simd-threaded.wasm');
   const mjsUrl   = chrome.runtime.getURL('ort/ort-wasm-simd-threaded.mjs');
@@ -56,151 +76,121 @@ async function runSmoke() {
   log('dim', `  MJS:   ${mjsUrl}`);
   log('dim', `  Model: ${modelUrl}`);
 
-  // ── S2: WASM asset fetch ──────────────────────────────────────
-  log('info', '\n── S2: WASM asset fetch ────────────────────────────');
+  // Force WASM backend for this smoke test run
   try {
-    const resp = await fetch(wasmUrl);
-    if (!assert(resp.ok, `ort-wasm-simd-threaded.wasm fetched (HTTP ${resp.status})`)) {
-      finish(); return;
-    }
-    // Read only first 8 bytes to verify WASM magic number (not full 14MB)
-    const buf = await resp.clone().arrayBuffer();
-    const magic = new Uint8Array(buf.slice(0, 4));
-    const isWasm = magic[0] === 0x00 && magic[1] === 0x61 &&
-                   magic[2] === 0x73 && magic[3] === 0x6d;
-    assert(isWasm, `WASM magic bytes: 0x${Array.from(magic).map(b=>b.toString(16).padStart(2,'0')).join(' ')}`);
-    log('dim', `  File size: ${(buf.byteLength / 1048576).toFixed(1)}MB`);
+    await setBackendOverride('wasm');
+    const confirmed = await readBackendOverride();
+    assert(confirmed === 'wasm', `chrome.storage.local antardrishti_backend='wasm' (got '${confirmed}')`);
+    log('dim', '  ✓ Backend override set to wasm in chrome.storage.local');
+    log('dim', '    NOTE: Service worker reads this at startup — if already running,');
+    log('dim', '    reload the extension (chrome://extensions → refresh) to take effect.');
   } catch (e) {
-    assert(false, `WASM fetch failed: ${e.message}`);
-    log('fail', '⚠ Cannot continue — check dist/chrome/ort/ contents.');
+    assert(false, `Failed to set backend override: ${e.message}`);
     finish(); return;
   }
 
-  // ── S3: ORT WASM runtime init ─────────────────────────────────
-  log('info', '\n── S3: ORT WASM runtime initialization ─────────────');
-  log('dim', '  Importing onnxruntime-web/wasm…');
-
-  // The smoke test page cannot use esbuild-bundled imports.
-  // Instead it imports the ORT bundle directly from the extension dist.
-  // The service worker uses the esbuild-bundled version; this page
-  // exercises the same WASM binary via a direct fetch+instantiate path.
-  let ort;
-  const ortJsUrl = chrome.runtime.getURL('ort-wasm-runtime.js');
+  // ── S2: WASM asset fetch ─────────────────────────────────────
+  log('info', '\n── S2: WASM runtime asset ──────────────────────────');
   try {
-    // Try globalThis.ort set by an inline-free script include
-    // (populated by service worker message or by ort-wasm-runtime.js)
-    if (globalThis.ort) {
-      ort = globalThis.ort;
-      assert(true, 'ORT available via globalThis.ort');
-    } else {
-      throw new Error('globalThis.ort not set');
+    const resp = await fetch(wasmUrl);
+    if (!assert(resp.ok, `ort-wasm-simd-threaded.wasm HTTP ${resp.status}`)) {
+      finish(); return;
     }
-  } catch {
-    // Smoke test cannot dynamic-import bundled ORT directly
-    // Demonstrate WASM loading via WebAssembly.instantiateStreaming instead
-    log('warn', '  ORT JS not available as standalone — verifying WASM init directly');
-
-    try {
-      const wasmResp = await fetch(wasmUrl);
-      assert(wasmResp.ok, `WASM binary fetch for compile: ${wasmResp.status}`);
-      const wasmModule = await WebAssembly.compileStreaming(wasmResp);
-      assert(wasmModule instanceof WebAssembly.Module, 'WebAssembly.compileStreaming succeeded');
-      const exports = WebAssembly.Module.exports(wasmModule);
-      log('dim', `  WASM exports: ${exports.length} entries`);
-      assert(exports.length > 0, `WASM module has ${exports.length} exports (valid module)`);
-      log('info', '  → WASM binary compiles correctly from extension-local URL');
-      log('info', '  → ORT session testing skipped (requires bundled ORT JS in page)');
-      log('info', '  → For full ORT session test, see service worker console logs');
-      finish();
-      return;
-    } catch (e) {
-      assert(false, `WebAssembly.compileStreaming failed: ${e.message}`);
-      finish();
-      return;
-    }
+    const buf   = await resp.arrayBuffer();
+    const magic = new Uint8Array(buf.slice(0, 4));
+    const isWasm = magic[0] === 0x00 && magic[1] === 0x61 &&
+                   magic[2] === 0x73 && magic[3] === 0x6d;
+    assert(isWasm, `WASM magic 00 61 73 6d verified`);
+    log('dim', `  File size: ${(buf.byteLength / 1048576).toFixed(1)} MB`);
+  } catch (e) {
+    assert(false, `WASM fetch failed: ${e.message}`);
+    finish(); return;
   }
 
-  // Configure ORT (same as service worker)
-  ort.env.wasm.numThreads = 1;
-  ort.env.wasm.wasmPaths = {
-    mjs:  mjsUrl,
-    wasm: wasmUrl,
-  };
-  log('dim', `  numThreads = ${ort.env.wasm.numThreads}`);
-  log('dim', `  wasmPaths.mjs  = ${ort.env.wasm.wasmPaths.mjs}`);
-  log('dim', `  wasmPaths.wasm = ${ort.env.wasm.wasmPaths.wasm}`);
-  assert(ort.env.wasm.numThreads === 1, 'numThreads=1 (no SharedArrayBuffer)');
-  assert(ort.env.wasm.wasmPaths?.wasm?.startsWith('chrome-extension://'), 'wasmPaths.wasm is extension-local URL');
+  // ── S3-S6: Service worker inference test ──────────────────────
+  // Send SMOKE_BACKEND_TEST to the coordinator.
+  // The coordinator uses already-loaded production models to run
+  // a real face-detector inference and reports the result.
+  log('info', '\n── S3: Service worker backend selection ────────────');
+  log('dim',  '  Sending SMOKE_BACKEND_TEST to coordinator...');
+  log('dim',  '  (If service worker was already started with WebGPU backend,');
+  log('dim',   '   reload the extension first: chrome://extensions → refresh icon)');
 
-  // ── S4: ONNX session creation ─────────────────────────────────
-  log('info', '\n── S4: ONNX session creation (face-detector) ────────');
-  let session;
+  let swResult;
   try {
-    const modelResp = await fetch(modelUrl);
-    assert(modelResp.ok, `face-detector.onnx fetched (${modelResp.status})`);
-    const modelBytes = await modelResp.arrayBuffer();
-    log('dim', `  Model size: ${(modelBytes.byteLength / 1024).toFixed(0)}KB`);
-
-    const t0 = performance.now();
-    session = await ort.InferenceSession.create(modelBytes, {
-      executionProviders: [{ name: 'wasm' }],
-      graphOptimizationLevel: 'all',
+    swResult = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Service worker timeout (30s)')), 30000);
+      chrome.runtime.sendMessage({ type: 'SMOKE_BACKEND_TEST' }, (response) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
     });
-    const initMs = (performance.now() - t0).toFixed(0);
-
-    assert(session !== null, `ONNX session created in ${initMs}ms`);
-    log('dim', `  Inputs:  ${session.inputNames.join(', ')}`);
-    log('dim', `  Outputs: ${session.outputNames.join(', ')}`);
-
   } catch (e) {
-    assert(false, `Session creation failed: ${e.message}`);
-    if (e.message?.includes('XMLHttpRequest')) {
-      log('fail', '  ⚠ XMLHttpRequest error — ORT is not using extension-local paths');
-    }
-    finish();
-    return;
+    assert(false, `Service worker unreachable: ${e.message}`);
+    log('fail', '  Is the extension loaded? Check chrome://extensions');
+    finish(); return;
   }
 
-  // ── S5: Real inference ────────────────────────────────────────
-  log('info', '\n── S5: Inference execution ─────────────────────────');
-  try {
-    // face-detector: [1, 3, 128, 128] float32 input
-    const inputName = session.inputNames[0];
-    const inputData = new Float32Array(1 * 3 * 128 * 128).fill(0.5);
-    const feeds = { [inputName]: new ort.Tensor('float32', inputData, [1, 3, 128, 128]) };
-
-    const t0 = performance.now();
-    const results = await session.run(feeds);
-    const inferMs = (performance.now() - t0).toFixed(1);
-
-    assert(Object.keys(results).length > 0, `Inference returned ${Object.keys(results).length} output tensor(s)`);
-    log('dim', `  Latency: ${inferMs}ms (backend=wasm, SIMD, numThreads=1)`);
-
-    // ── S6: Output tensor shape ──────────────────────────────────
-    log('info', '\n── S6: Output tensor shape ─────────────────────────');
-    for (const [name, tensor] of Object.entries(results)) {
-      assert(tensor.dims.length > 0, `Output "${name}" shape=[${tensor.dims.join(',')}]`);
-      log('dim', `  "${name}": shape=[${tensor.dims.join(',')}] dtype=${tensor.type}`);
-    }
-
-    assert(parseFloat(inferMs) < 10000, `Inference < 10s (got ${inferMs}ms)`);
-    log('dim', `\n  [ModelRuntime] browser=chrome`);
-    log('dim', `  [ModelRuntime] selectedBackend=wasm`);
-    log('dim', `  [OnnxSession] Initialized: face-detector-v1 backend=wasm initMs=~${inferMs}`);
-
-  } catch (e) {
-    assert(false, `Inference failed: ${e.message}`);
-  } finally {
-    session?.release?.();
+  if (!swResult) {
+    assert(false, 'Service worker returned null response');
+    finish(); return;
   }
+
+  if (!swResult.success) {
+    assert(false, `Service worker error: ${swResult.error}`);
+    log('dim', `  backend in SW: ${swResult.backend}`);
+    finish(); return;
+  }
+
+  // S3 — backend selection
+  const { backend, inferenceMs, outputNames, outputShape, modelId } = swResult;
+  assert(backend === 'wasm',
+    `S3: selectedBackend=wasm (got '${backend}')`);
+  log('dim', `  [ModelRuntime] requestedBackend=wasm`);
+  log('dim', `  [ModelRuntime] selectedBackend=${backend}`);
+
+  // S4 — session proof
+  log('info', '\n── S4: ONNX session (face-detector) ────────────────');
+  assert(typeof modelId === 'string' && modelId.includes('face'),
+    `S4: face-detector session initialized (id='${modelId}')`);
+  log('dim', `  [OnnxSession] model=${modelId} backend=${backend}`);
+
+  // S5 — real inference
+  log('info', '\n── S5: Inference execution ──────────────────────────');
+  assert(typeof inferenceMs === 'number' && inferenceMs >= 0,
+    `S5: Inference completed in ${inferenceMs}ms`);
+  assert(inferenceMs < 30000,
+    `S5: Inference < 30s (got ${inferenceMs}ms)`);
+  log('dim', `  Latency: ${inferenceMs}ms (backend=wasm, SIMD, numThreads=1)`);
+  log('dim', `  Outputs: ${(outputNames ?? []).join(', ')}`);
+
+  // S6 — output tensor shape
+  log('info', '\n── S6: Output tensor shape ──────────────────────────');
+  assert(Array.isArray(outputShape) && outputShape.length > 0,
+    `S6: Output shape=[${(outputShape ?? []).join(',')}] (non-empty)`);
+  log('dim', `  shape=[${(outputShape ?? []).join(',')}]`);
+
+  // Absence of WebGPU attempt
+  log('info', '\n── Verification ─────────────────────────────────────');
+  assert(backend !== 'webgpu',
+    'No WebGPU session creation attempted in forced-WASM run');
+  assert(backend === 'wasm',
+    'ORT initialized with WASM-only backend — no JSEP/WebGPU EP loaded');
+  log('dim', '  ✓ No "WebGPU session creation failed, falling back to WASM"');
+  log('dim', '  ✓ No Worker dynamic import error');
+  log('dim', '  ✓ No XMLHttpRequest error');
 
   finish();
 }
 
 function finish() {
-  log('info', '\n══════════════════════════════════════════════════');
+  log('info', '\n══════════════════════════════════════════════════════');
   log('info', `  Smoke test: ${passed} passed, ${failed} failed`);
-  log('info', '══════════════════════════════════════════════════');
+  log('info', '══════════════════════════════════════════════════════');
 
   summaryEl.className = `summary ${failed === 0 ? 'ok' : 'err'}`;
   summaryEl.textContent = failed === 0

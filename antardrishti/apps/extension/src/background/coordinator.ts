@@ -287,6 +287,12 @@ export class Coordinator {
         sendResponse({ ack: true });
         break;
 
+      case 'SMOKE_BACKEND_TEST':
+        // Phase 9 smoke test: prove a real ONNX inference session ran.
+        // Returns backend selection log + inference result.
+        this.handleSmokeBackendTest(sendResponse);
+        break;
+
       default:
         sendResponse({ ack: true });
     }
@@ -1103,5 +1109,68 @@ export class Coordinator {
     }
 
     return nodes;
+  }
+
+  // ── Phase 9 smoke test ───────────────────────────────────────
+
+  /**
+   * SMOKE_BACKEND_TEST message handler.
+   *
+   * Runs a real face-detector inference on a synthetic 640×640 image
+   * using the already-loaded production models. Returns backend info +
+   * inference timing + output tensor shape.
+   *
+   * Called by ort-smoke-test.js to prove S4-S6 (session + inference + output).
+   */
+  private handleSmokeBackendTest(
+    sendResponse: (response: unknown) => void,
+  ): void {
+    (async () => {
+      try {
+        // Await model readiness (models load at coordinator init)
+        const models = await this._modelReadiness;
+        const backend = models.backend;
+
+        console.log(`[Coordinator] SMOKE_BACKEND_TEST: backend=${backend}`);
+
+        // Synthetic 640×640 RGB image (zeros — shape inference only)
+        const H = 640, W = 640;
+        const syntheticInput = new Float32Array(1 * 3 * H * W); // NCHW
+
+        // Run face detector (the smallest model — fastest smoke-test)
+        const t0 = performance.now();
+        const result = await models.faceDetector.run(
+          { input: syntheticInput },
+          { input: [1, 3, H, W] },
+        );
+        const inferenceMs = (performance.now() - t0).toFixed(1);
+
+        const outputNames = Object.keys(result.outputs);
+        const firstOutput = result.outputs[outputNames[0]];
+        const outputShape = result.outputShapes[outputNames[0]] ?? [];
+
+        console.log(
+          `[Coordinator] SMOKE_BACKEND_TEST: done in ${inferenceMs}ms`,
+          { outputNames, outputShape },
+        );
+
+        sendResponse({
+          success: true,
+          backend,
+          inferenceMs: Number(inferenceMs),
+          outputNames,
+          outputShape,
+          modelId: models.faceDetector.manifest.id,
+        });
+      } catch (e) {
+        const err = e as Error;
+        console.error('[Coordinator] SMOKE_BACKEND_TEST failed:', err.message);
+        sendResponse({
+          success: false,
+          error: err.message,
+          backend: this._loadedModels?.backend ?? 'unknown',
+        });
+      }
+    })();
   }
 }

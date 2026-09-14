@@ -116,7 +116,8 @@ import {
   OnnxFaceDetectorSession,
   OnnxRegionParserSession,
 } from './onnx-adapters';
-import { detectRuntime } from './runtime';
+import { detectRuntime, readBackendOverride } from './runtime';
+
 import type { InferenceMetrics } from './types';
 
 export interface LoadedModels {
@@ -139,7 +140,11 @@ export interface LoadedModels {
  * Call pipeline.registerModels(loaded) to activate production path.
  */
 export async function loadProductionModels(): Promise<LoadedModels> {
-  const runtime = await detectRuntime();
+  // Read backend override from chrome.storage.local before hardware detection.
+  // Set with: chrome.storage.local.set({ antardrishti_backend: 'wasm' })
+  // Revert:   chrome.storage.local.remove('antardrishti_backend')
+  const requestedBackend = await readBackendOverride();
+  const runtime = await detectRuntime(requestedBackend);
   const backend = runtime.selectedBackend;
 
   console.log('[ModelLoader] Loading production models', {
