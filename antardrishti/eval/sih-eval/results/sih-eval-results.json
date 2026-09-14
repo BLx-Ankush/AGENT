@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-09-13T11:41:28.454Z",
+    "timestamp": "2026-09-14T13:52:06.019Z",
     "fixture": "apps/demo-page/index.html",
     "backend": "onnxruntime-node/cpu",
     "nodeVersion": "v24.11.0",
@@ -86,12 +86,12 @@
     "textDetector": {
       "pixelsAbove03": 3220,
       "textRatio": "0.0079",
-      "latencyMs": 173
+      "latencyMs": 203
     },
     "regionParser": {
       "uiDetections": 24,
       "maxConf": "0.878",
-      "latencyMs": 77
+      "latencyMs": 106
     },
     "faceDetector": {
       "N": 0,
@@ -101,7 +101,7 @@
         16
       ],
       "box": null,
-      "latencyMs": 5
+      "latencyMs": 8
     },
     "gtRegions": 8,
     "detectedRegions": 6,
@@ -117,7 +117,7 @@
     "adversarialLeakPixels": 0,
     "plannedRegions": 5,
     "gtRegions": 5,
-    "latencyMs": 4
+    "latencyMs": 6
   },
   "latencyEval": {
     "configs": [
@@ -131,19 +131,19 @@
             "meanMs": "0.00"
           },
           "harvest": {
-            "p50ms": "0.31",
-            "p95ms": "1.37",
-            "meanMs": "0.45"
+            "p50ms": "0.22",
+            "p95ms": "0.33",
+            "meanMs": "0.22"
           },
           "forbidden": {
-            "p50ms": "0.01",
-            "p95ms": "0.03",
+            "p50ms": "0.00",
+            "p95ms": "0.02",
             "meanMs": "0.01"
           },
           "total": {
-            "p50ms": "0.32",
-            "p95ms": "1.41",
-            "meanMs": "0.47"
+            "p50ms": "0.22",
+            "p95ms": "0.34",
+            "meanMs": "0.23"
           }
         }
       },
@@ -163,10 +163,10 @@
   },
   "resourceEval": {
     "loadTimes": {
-      "text-detector": 222,
-      "ocr-recognizer": 352,
-      "face-detector": 39,
-      "ui-region-detector": 137
+      "text-detector": 159,
+      "ocr-recognizer": 234,
+      "face-detector": 32,
+      "ui-region-detector": 202
     },
     "modelSizesMB": {
       "text-detector": "4.75",
@@ -175,10 +175,10 @@
       "ui-region-detector": "12.14"
     },
     "totalModelSizeMB": "28.24",
-    "heapBeforeMB": "11.8",
-    "heapAfterMB": "12.0",
+    "heapBeforeMB": "14.4",
+    "heapAfterMB": "14.5",
     "heapDeltaMB": "0.1",
-    "rssMB": "184.9",
+    "rssMB": "219.1",
     "gpu": "N/A -- CPU backend",
     "inferenceCountPerRun": 4,
     "estimatedCaptureBytes": {
