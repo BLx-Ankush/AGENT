@@ -5,8 +5,14 @@
  * Handles model loading, SHA-256 hash verification, backend selection,
  * and per-inference metrics.
  *
- * ONNX Runtime Web is loaded dynamically to keep the bundle size
- * manageable and to support offscreen document / extension page hosts.
+ * ONNX Runtime Web is statically imported so esbuild bundles it at
+ * compile time. This is required for Chrome MV3 service workers, which
+ * reject any service worker code that CONTAINS a dynamic import() call
+ * — even inside dead-code paths that are never executed.
+ *
+ * The ortMv3Plugin in build.mjs patches ORT's internal dynamic import()
+ * (the thread worker loader, dead at numThreads=1) out of the bundle
+ * before esbuild processes it, eliminating all import() from the SW.
  */
 
 import type {
@@ -15,6 +21,13 @@ import type {
   ModelManifest,
   InferenceBackend,
 } from './types';
+
+// STATIC import of WASM-only ORT bundle.
+// esbuild resolves this to ort.wasm.bundle.min.mjs (71KB) at build time.
+// No runtime import() call is emitted by our code.
+// The ortMv3Plugin in build.mjs patches out ORT's own dead-code import()
+// so the final service-worker.js contains zero import() expressions.
+import * as _ortWasm from 'onnxruntime-web/wasm';
 
 /**
  * ONNX Runtime Web inference session implementation.
@@ -218,103 +231,135 @@ export class OnnxSession implements InferenceSession {
   }
 
   /**
-   * Load ONNX Runtime Web (WASM-only entry point) for MV3 service worker.
+   * Load ONNX Runtime Web for MV3 service worker.
    *
-   * SECOND ROOT CAUSE FIX:
-   *   import('onnxruntime-web') loads ort.bundle.min.mjs (404KB) which
-   *   includes the full JSEP/WebGPU execution provider. ORT auto-initialises
-   *   the JSEP backend and loads ort-wasm-simd-threaded.jsep.mjs whose
-   *   internal loader falls back to XMLHttpRequest (not in service workers).
+   * THIRD ROOT CAUSE FIX (import() is disallowed on ServiceWorkerGlobalScope):
    *
-   *   FIX: import('onnxruntime-web/wasm') → ort.wasm.bundle.min.mjs (71KB).
-   *   This is the WASM-EP-only bundle. JSEP/WebGPU EP is never registered.
-   *   ort-wasm-simd-threaded.jsep.mjs is never touched.
+   *   Chrome MV3 rejects any service worker that CONTAINS `import()` syntax
+   *   at PARSE TIME — even inside dead code that is never executed.
+   *
+   *   ORT 1.29.0 WASM bundle contains:
+   *     us = async n => (await import(webpackIgnore n)).default
+   *   This is a dead-code worker loader (0 call sites at numThreads=1).
+   *   But Chrome sees `import(` and immediately throws TypeError.
+   *
+   *   FIX 1 (build time): ortMv3Plugin in build.mjs replaces ORT's
+   *     import() with a stub before esbuild bundles the code.
+   *
+   *   FIX 2 (this file): Static `import * as _ortWasm from 'onnxruntime-web/wasm'`
+   *     at module level. esbuild bundles ORT inline at compile time.
+   *     Our own code emits zero import() calls.
+   *
+   *   FIX 3 (runtime): Set proxy=false + wasmBinary to prevent ORT from
+   *     ever trying to load a worker or blob URL.
    *
    * WASM runtime assets (extension-local, no CDN):
-   *   ort-wasm-simd-threaded.mjs   → thread worker bootstrap (24KB)
-   *   ort-wasm-simd-threaded.wasm  → WASM binary (13.3MB, SIMD)
-   *
-   * For a future WebGPU path, switch to import('onnxruntime-web/webgpu')
-   * and configure jsep.mjs + jsep.wasm paths separately.
+   *   ort-wasm-simd-threaded.mjs   → worker bootstrap (not used at numThreads=1)
+   *   ort-wasm-simd-threaded.wasm  → WASM binary (pre-fetched into wasmBinary)
    */
   private async loadOnnxRuntime(): Promise<any> {
-    let ort: any;
-    try {
-      // WASM-only ORT bundle — esbuild resolves to ort.wasm.bundle.min.mjs.
-      // No JSEP/WebGPU EP registered. No jsep.mjs ever loaded.
-      ort = await import('onnxruntime-web/wasm');
-    } catch {
-      // Fallback: ort loaded as global via script tag (offscreen page context)
-      if ((globalThis as any).ort) {
-        ort = (globalThis as any).ort;
-      } else {
-        throw new Error(
-          'ONNX Runtime Web not available. Ensure onnxruntime-web/wasm is bundled.',
-        );
-      }
-    }
+    // ORT is statically imported at module level (_ortWasm).
+    // No runtime import() call. MV3-safe.
+    const ort = _ortWasm;
 
-    console.log('[OnnxSession] ORT runtime loaded (WASM-only bundle)');
+    // Configure ORT env exactly once across all 4 parallel sessions.
+    // Uses a singleton Promise to prevent race on concurrent Promise.all()
+    // initialization (4 sessions initialised simultaneously by coordinator).
+    await OnnxSession.getOrtConfigPromise(ort);
 
-    // Configure ORT WASM environment (once per extension lifetime)
-    OnnxSession.configureOrtEnv(ort);
-
+    console.log('[OnnxSession] ORT runtime loaded (static import, WASM-only, MV3-safe)');
     return ort;
   }
 
   /**
    * Configure ORT WASM environment for MV3 service worker compatibility.
    *
-   * MUST be called before any InferenceSession.create().
-   * Static flag ensures configuration runs exactly once even when
+   * MUST complete before any InferenceSession.create().
+   * Singleton Promise ensures configuration runs exactly once even when
    * 4 sessions are initialised in parallel via Promise.all().
    *
-   * wasmPaths OBJECT format (confirmed from ORT 1.29 source):
-   *   let c = o?.mjs   ← property key 'mjs'
-   *   let m = o?.wasm  ← property key 'wasm'
-   * NOT filename-keyed. NOT a string map.
-   *
-   * numThreads=1 ensures no SharedArrayBuffer is required:
-   *   - MV3 service workers have no SAB and cannot call Atomics.wait()
-   *   - ort-wasm-simd-threaded.wasm works at numThreads=1 (no threads activated)
+   * Key settings:
+   *   numThreads=1  — disables thread workers (no SharedArrayBuffer needed)
+   *   proxy=false   — disables proxy worker (prevents blob URL + import())
+   *   wasmBinary    — pre-fetched Uint8Array; ORT uses it directly, skipping
+   *                   all URL-based loading and any internal import() calls
+   *   wasmPaths     — set for internal path refs (defense-in-depth)
    */
-  private static _ortEnvConfigured = false;
+  private static _ortConfigPromise: Promise<void> | null = null;
 
-  static configureOrtEnv(ort: any): void {
-    if (OnnxSession._ortEnvConfigured) return;
-    OnnxSession._ortEnvConfigured = true;
+  private static getOrtConfigPromise(ort: any): Promise<void> {
+    if (!OnnxSession._ortConfigPromise) {
+      OnnxSession._ortConfigPromise = OnnxSession._doConfigureOrt(ort);
+    }
+    return OnnxSession._ortConfigPromise;
+  }
 
-    // ── Disable threading (no SharedArrayBuffer in MV3 SW) ────
+  private static async _doConfigureOrt(ort: any): Promise<void> {
+    // ── 1. Disable threading ─────────────────────────────────────────
+    // numThreads=1: disables SIMD thread worker creation.
+    // MV3 service workers have no SharedArrayBuffer / Atomics.wait().
     ort.env.wasm.numThreads = 1;
 
-    // ── Explicit WASM asset paths ─────────────────────────────
-    // ORT 1.29 wasmPaths object API: { mjs: string, wasm: string }
-    //   mjs  → thread worker bootstrap (loaded via new URL(O, mjs).href)
-    //   wasm → WASM binary (loaded via locateFile returning this URL)
-    // With numThreads=1 no worker thread is created, but providing
-    // both URLs prevents any fallback URL-derivation that could hit XHR.
+    // ── 2. Disable proxy worker ──────────────────────────────────
+    // proxy=false (explicit, matching default): prevents ORT from creating
+    // a blob URL worker and calling import(blobUrl) — which would also fail.
+    ort.env.wasm.proxy = false;
+
     try {
-      const getUrl = (globalThis as any).chrome?.runtime?.getURL;
+      const chrome_ = (globalThis as any).chrome;
+      const getUrl = chrome_?.runtime?.getURL;
+
       if (typeof getUrl === 'function') {
-        const mjsPath  = getUrl.call((globalThis as any).chrome.runtime, 'ort/ort-wasm-simd-threaded.mjs');
-        const wasmPath = getUrl.call((globalThis as any).chrome.runtime, 'ort/ort-wasm-simd-threaded.wasm');
+        const wasmUrl = getUrl.call(chrome_.runtime, 'ort/ort-wasm-simd-threaded.wasm');
+        const mjsUrl  = getUrl.call(chrome_.runtime, 'ort/ort-wasm-simd-threaded.mjs');
 
-        ort.env.wasm.wasmPaths = { mjs: mjsPath, wasm: wasmPath };
+        // ── 3. Pre-fetch WASM binary ──────────────────────────────
+        // Provide WASM binary as Uint8Array so ORT skips all URL loading.
+        // ORT code path: if (g) v.wasmBinary = g, v.locateFile = O => O
+        // This prevents ORT from issuing any fetch or import() for the binary.
+        const wasmResp = await fetch(wasmUrl);
+        if (!wasmResp.ok) {
+          throw new Error(`[OnnxSession] WASM binary fetch failed: HTTP ${wasmResp.status} ${wasmUrl}`);
+        }
+        const wasmBuf = await wasmResp.arrayBuffer();
+        ort.env.wasm.wasmBinary = new Uint8Array(wasmBuf);
 
-        console.log('[OnnxSession] WASM mjs  path=', mjsPath);
-        console.log('[OnnxSession] WASM wasm path=', wasmPath);
+        // ── 4. Set explicit wasmPaths (defense-in-depth) ────────────
+        // Covers any internal ORT path resolution that bypasses wasmBinary.
+        // ORT 1.29 object format: { mjs: string, wasm: string }
+        ort.env.wasm.wasmPaths = { mjs: mjsUrl, wasm: wasmUrl };
+
+        console.log('[OnnxSession] WASM mjs  path=', mjsUrl);
+        console.log('[OnnxSession] WASM wasm path=', wasmUrl);
+        console.log('[OnnxSession] WASM binary pre-loaded:', wasmBuf.byteLength, 'bytes');
+
+      } else {
+        // ── Node.js test context: no chrome API ────────────────────
+        // ORT uses its own WASM resolution (Node.js compatible path).
+        console.log('[ModelRuntime] Non-extension context: default ORT path resolution');
       }
-    } catch {
-      // Node.js test context — no chrome API. ORT uses its own resolver.
-      console.log('[ModelRuntime] Non-extension context: default ORT path resolution');
+    } catch (err) {
+      // Configuration error is fatal — surface it clearly.
+      console.error('[OnnxSession] ORT env configuration failed:', err);
+      throw err;
     }
 
     console.log('[ModelRuntime] ORT env configured:', {
       numThreads: ort.env.wasm.numThreads,
+      proxy: ort.env.wasm.proxy,
+      wasmBinary: ort.env.wasm.wasmBinary
+        ? `Uint8Array(${ort.env.wasm.wasmBinary.byteLength} bytes)`
+        : 'not set',
       wasmPaths: ort.env.wasm.wasmPaths ?? '(default)',
       simd: true,
-      threaded: false,
     });
+  }
+
+  // Legacy public static kept for smoke-test compatibility
+  static configureOrtEnv(_ort: any): void {
+    // Configuration is now async (WASM binary pre-fetch).
+    // Use getOrtConfigPromise() internally; this shim no-ops for external callers.
+    console.warn('[OnnxSession] configureOrtEnv() is deprecated; configuration happens automatically.');
   }
 
   private async loadModelBytes(): Promise<ArrayBuffer> {

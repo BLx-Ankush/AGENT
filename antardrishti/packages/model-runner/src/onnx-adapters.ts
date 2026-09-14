@@ -482,25 +482,31 @@ async function loadPpocrCharset(modelDirUrl: string = ''): Promise<string[]> {
     }
   }
 
-  // Node.js environment (audit harness / tests)
-  try {
-    const { readFileSync } = await import('fs');
-    const { join, dirname } = await import('path');
-    // Try sibling to this script, or workspace relative
-    const candidates = [
-      join(process.cwd(), 'apps/extension/assets/models/ppocr_keys_v1.txt'),
-    ];
-    for (const p of candidates) {
-      try {
-        const text = readFileSync(p, 'utf-8');
-        const chars = text.split('\n').map((l: string) => l.replace(/\r$/, '')).filter((l: string) => l.length > 0);
-        chars.push(' ');
-        _ppocrCharsCache = chars;
-        console.log(`[OnnxOcr] Loaded PP-OCR charset: ${chars.length} chars from ${p}`);
-        return chars;
-      } catch { /* try next */ }
-    }
-  } catch { /* not Node.js */ }
+  // Node.js environment (audit harness / tests).
+  // Guard: dynamic import('fs') is NEVER called in browser/service-worker context.
+  // Chrome MV3 service workers throw "import() is disallowed on ServiceWorkerGlobalScope"
+  // when import() executes — even for modules that don't exist in the browser.
+  if (typeof process !== 'undefined' && typeof process.versions?.node === 'string') {
+    try {
+      const { readFileSync } = await import('fs');
+      const { join, dirname } = await import('path');
+      // Try sibling to this script, or workspace relative
+      const candidates = [
+        join(process.cwd(), 'apps/extension/assets/models/ppocr_keys_v1.txt'),
+      ];
+      for (const p of candidates) {
+        try {
+          const text = readFileSync(p, 'utf-8');
+          const chars = text.split('\n').map((l: string) => l.replace(/\r$/, '')).filter((l: string) => l.length > 0);
+          chars.push(' ');
+          _ppocrCharsCache = chars;
+          console.log(`[OnnxOcr] Loaded PP-OCR charset: ${chars.length} chars from ${p}`);
+          return chars;
+        } catch { /* try next */ }
+      }
+    } catch { /* not Node.js */ }
+  }
+
 
   // Last resort: ASCII-only fallback (will produce wrong output for CJK content)
   console.warn(
