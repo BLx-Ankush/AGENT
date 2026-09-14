@@ -146,6 +146,17 @@ export class Coordinator {
 
   private _backend = 'unknown';
 
+  /**
+   * Persistent OFFSCREEN_READY state buffer.
+   * Set true the moment OFFSCREEN_READY is received, regardless of whether
+   * _waitForOffscreenReady() has installed its resolver yet. This eliminates
+   * the race where READY arrives during _ensureOffscreenDocument() await.
+   *
+   * Reset to false only on deliberate disposal/recreation of the document.
+   */
+  private _offscreenReadyReceived = false;
+  private _offscreenRuntimeInstanceId: string | null = null;
+
   // -- Firefox direct-load state ------------------------------------------
   private _loadedModels: LoadedModels | null = null;
 
@@ -262,13 +273,29 @@ export class Coordinator {
    * OFFSCREEN_READY != inference ready.
    * OFFSCREEN_READY only proves the message listener is registered.
    */
+  /**
+   * Wait for OFFSCREEN_READY message from the offscreen document.
+   * Race-safe: if READY already arrived (buffered in _offscreenReadyReceived),
+   * resolves immediately without installing a waiter.
+   *
+   * Rejects after timeoutMs if READY never arrives. Fail-closed.
+   * OFFSCREEN_READY != inference ready.
+   */
   private _waitForOffscreenReady(timeoutMs: number): Promise<void> {
+    // Buffer check: READY may have arrived before this waiter was installed.
+    // This eliminates the race where READY arrives during _ensureOffscreenDocument().
+    if (this._offscreenReadyReceived) {
+      console.log('[Coordinator] Offscreen READY already buffered -- instance=' +
+        this._offscreenRuntimeInstanceId);
+      return Promise.resolve();
+    }
+
     return new Promise<void>((resolve, reject) => {
       this._offscreenReadyResolve = resolve;
       this._offscreenReadyReject = reject;
       setTimeout(() => {
         if (this._offscreenReadyResolve) {
-          console.error('[Coordinator] Offscreen READY timeout after ' + timeoutMs + 'ms');
+          console.error('[Coordinator] ❌ Offscreen READY timeout after ' + timeoutMs + 'ms');
           this._offscreenReadyResolve = null;
           this._offscreenReadyReject = null;
           reject(new Error('[Coordinator] Offscreen READY timeout -- fail-closed'));
@@ -463,16 +490,32 @@ export class Coordinator {
 
   private _handleOffscreenMessage(message: unknown): void {
 
-    // -- Phase 1: OFFSCREEN_READY ----------------------------------------
+    // -- Phase 1: OFFSCREEN_READY ------------------------------------------
     // Sent by offscreen.ts immediately after its onMessage listener is
     // registered. This proves the listener is live before INFERENCE_INIT.
     // OFFSCREEN_READY != inference ready.
+    //
+    // BUFFER: _offscreenReadyReceived is set immediately on arrival, even if
+    // _waitForOffscreenReady() has not yet installed its resolver. This
+    // eliminates the race where READY arrives during _ensureOffscreenDocument().
+    //
+    // IDEMPOTENT: multiple READY messages from the same instance are harmless.
+    // A new instance ID updates _offscreenRuntimeInstanceId.
     if ((message as any)?.type === 'OFFSCREEN_READY') {
       const rid = (message as any).runtimeInstanceId ?? 'unknown';
       console.log('[Coordinator] Offscreen READY received -- instance=' + rid);
-      this._offscreenReadyResolve?.();
-      this._offscreenReadyResolve = null;
-      this._offscreenReadyReject = null;
+
+      // Buffer the READY signal -- survives race with _waitForOffscreenReady()
+      this._offscreenReadyReceived = true;
+      this._offscreenRuntimeInstanceId = rid;
+
+      // If a waiter is already installed, resolve it now.
+      // If not installed yet, _waitForOffscreenReady() will see the buffer.
+      if (this._offscreenReadyResolve) {
+        this._offscreenReadyResolve();
+        this._offscreenReadyResolve = null;
+        this._offscreenReadyReject = null;
+      }
       return;
     }
 
@@ -534,6 +577,11 @@ export class Coordinator {
       this._offscreenInitReject = null;
       this._offscreenReadyResolve = null;
       this._offscreenReadyReject = null;
+      // Reset ready buffer: offscreen document is dead after a fatal error.
+      // Next lifecycle must receive a fresh OFFSCREEN_READY.
+      this._offscreenReadyReceived = false;
+      this._offscreenRuntimeInstanceId = null;
+      this._offscreenInitPromise = null;
     }
   }
 
