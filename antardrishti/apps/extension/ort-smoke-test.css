@@ -57,3 +57,55 @@ main { display: flex; flex-direction: column; gap: 16px; }
 }
 .summary.ok  { background: rgba(74,222,128,.1); border: 1px solid var(--pass); color: var(--pass); }
 .summary.err { background: rgba(248,113,113,.1); border: 1px solid var(--fail); color: var(--fail); }
+
+/* -- Status card (wraps #status and #timing) ----------------------------- */
+.status-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* -- Stage list (#s1-#s6) ------------------------------------------------ */
+.stages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stages > div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+/* -- Pending state (initial, before result arrives) ---------------------- */
+.pending {
+  color: var(--dim);
+}
+
+/* Override border for pass/fail on stage divs */
+.stages > .pass  { border-color: var(--pass); }
+.stages > .fail  { border-color: var(--fail); }
+
+/* -- Overall status banner (#status) ------------------------------------- */
+#status {
+  font-size: 15px;
+  font-weight: bold;
+  padding: 4px 0;
+}
+
+#status.pass { color: var(--pass); }
+#status.fail { color: var(--fail); }
+#status.pending { color: var(--warn); }
+
+/* -- Timing readout (#timing) -------------------------------------------- */
+.timing {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--dim);
+  min-height: 16px;
+}
