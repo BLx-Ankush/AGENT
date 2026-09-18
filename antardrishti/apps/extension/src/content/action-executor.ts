@@ -16,32 +16,25 @@ const nodeRegistry = new Map<string, HTMLElement>();
 let registryGeneration = '';
 
 /**
- * Rebuild the node registry from current DOM state.
- * Called after every harvest to keep references fresh.
+ * Install the authoritative nodeId → HTMLElement registry produced
+ * by the harvester during harvestDOM().
+ *
+ * P0-B invariant: nodeId → exact HTMLElement observed during THIS harvest.
+ * The executor NEVER generates node IDs independently.
+ *
+ * Entries are copied so the executor holds its own snapshot and is not
+ * affected if the harvester's internal map is cleared on next harvest.
  */
-export function rebuildNodeRegistry(documentGeneration: string): void {
+export function setNodeRegistry(
+  registry: ReadonlyMap<string, HTMLElement>,
+  documentGeneration: string,
+): void {
   nodeRegistry.clear();
   registryGeneration = documentGeneration;
-
-  let counter = 0;
-  const selector =
-    'a, button, input, select, textarea, [role], [tabindex], ' +
-    'label, img, h1, h2, h3, h4, h5, h6, canvas, svg, nav, ' +
-    'main, header, footer, aside, form, dialog, progress, meter';
-
-  for (const el of document.querySelectorAll(selector)) {
-    if (!(el instanceof HTMLElement)) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 1 || rect.height < 1) continue;
-
-    const style = getComputedStyle(el);
-    if (style.display === 'none') continue;
-
-    const nodeId = `node-${++counter}`;
-    nodeRegistry.set(nodeId, el);
+  for (const [id, el] of registry) {
+    nodeRegistry.set(id, el);
   }
-
-  console.log(`[Executor] Registry rebuilt: ${nodeRegistry.size} nodes`);
+  console.log(`[Executor] Registry set from harvester: ${nodeRegistry.size} nodes (gen=${documentGeneration})`);
 }
 
 // ── Action result ────────────────────────────────────────────

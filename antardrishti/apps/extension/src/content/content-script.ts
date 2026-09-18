@@ -17,9 +17,9 @@ import {
   type MessageEnvelope,
 } from '@antardrishti/protocol-v2';
 
-import { harvestDOM } from '@antardrishti/scene-graph';
+import { harvestDOM, getLastHarvestElementMap } from '@antardrishti/scene-graph';
 import { hitTestNode, hitTestMultiPoint } from '@antardrishti/scene-graph';
-import { executeAction, rebuildNodeRegistry } from './action-executor';
+import { executeAction, setNodeRegistry } from './action-executor';
 
 // ── State ────────────────────────────────────────────────────
 
@@ -85,8 +85,9 @@ function handleSnapshotRequest(
   try {
     const result = harvestDOM(obsId, documentGeneration, 0);
 
-    // Rebuild node registry for action execution
-    rebuildNodeRegistry(documentGeneration);
+    // P0-B: Install the harvester's authoritative nodeId→HTMLElement map.
+    // The executor uses this exact mapping — no independent ID generation.
+    setNodeRegistry(getLastHarvestElementMap(), documentGeneration);
 
     sendResponse({
       ack: true,
