@@ -18,6 +18,26 @@ import {
   fastHash,
 } from './node-id';
 
+// ── Authoritative nodeId → HTMLElement map (P0-B) ────────────
+//
+// Built during harvestDOM(). Each nodeId is mapped to the exact
+// HTMLElement that was observed during THIS harvest traversal.
+// The action executor consumes a copy of this map — it NEVER
+// regenerates node IDs independently.
+//
+// This map lives in content-script memory. It is never serialized
+// and never crosses the message boundary.
+
+const _lastHarvestElementMap = new Map<string, HTMLElement>();
+
+/**
+ * Return the authoritative nodeId→HTMLElement map from the last harvest.
+ * The caller MUST copy entries — the internal map is cleared on next harvest.
+ */
+export function getLastHarvestElementMap(): ReadonlyMap<string, HTMLElement> {
+  return _lastHarvestElementMap;
+}
+
 // ── Harvester configuration ──────────────────────────────────
 
 const MAX_TEXT_LENGTH = 200;
@@ -67,6 +87,7 @@ export function harvestDOM(
   frameId: number,
 ): HarvestResult {
   resetNodeIdCounter();
+  _lastHarvestElementMap.clear();
   const now = new Date().toISOString();
   const nodes: SceneNode[] = [];
   const origin = window.location.origin;
@@ -152,6 +173,7 @@ function harvestElement(
   const visibleText = getVisibleText(el);
   const affordances = inferAffordances(el, role);
   const id = generateSequentialNodeId();
+  _lastHarvestElementMap.set(id, el);
 
   // Ancestry
   const ancestorTags = getAncestorTags(el);

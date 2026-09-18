@@ -19,6 +19,8 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
-    "canvas": "^3.2.3"
+    "@types/jsdom": "^30.0.0",
+    "canvas": "^3.2.3",
+    "jsdom": "^29.1.1"
   }
 }
