@@ -86,6 +86,7 @@ const CONFIRMATION_TIMEOUT_MS = 60_000;
 // Trusted extension UI pages live at chrome-extension://<id>/popup.html
 // Content scripts have sender.tab set; extension pages do NOT.
 const TRUSTED_UI_PATHS = ['/popup.html'];
+const TRUSTED_OFFSCREEN_PATH = '/offscreen.html';
 
 // ── State ────────────────────────────────────────────────────
 
@@ -517,6 +518,51 @@ export class Coordinator {
     return true;
   }
 
+  /**
+   * Verify that the runtime sender is the trusted offscreen document.
+   * Used for OFFSCREEN_READY, INFERENCE_INIT_RESULT, INFERENCE_RESULT,
+   * INFERENCE_ERROR.
+   *
+   * Checks:
+   * 1. sender exists
+   * 2. sender.id === chrome.runtime.id (same extension)
+   * 3. sender.url starts with this extension's origin
+   * 4. sender.url path === '/offscreen.html'
+   * 5. sender.tab is NOT set (offscreen documents are extension pages)
+   */
+  private _isTrustedOffscreen(sender: chrome.runtime.MessageSender): boolean {
+    if (!sender || !sender.id || !sender.url) return false;
+    if (sender.id !== chrome.runtime.id) return false;
+    if (sender.tab) return false;
+    const extensionOrigin = `chrome-extension://${chrome.runtime.id}`;
+    if (!sender.url.startsWith(extensionOrigin)) return false;
+    try {
+      const senderPath = new URL(sender.url).pathname;
+      if (senderPath !== TRUSTED_OFFSCREEN_PATH) return false;
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Verify that the runtime sender is a trusted extension page
+   * (UI or offscreen). Used for internal diagnostic messages like
+   * SMOKE_OFFSCREEN_TEST.
+   *
+   * A trusted extension page has:
+   * - sender.id === chrome.runtime.id
+   * - sender.url starts with extension origin
+   * - no sender.tab (extension pages, not content scripts)
+   */
+  private _isTrustedExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+    if (!sender || !sender.id || !sender.url) return false;
+    if (sender.id !== chrome.runtime.id) return false;
+    if (sender.tab) return false;
+    const extensionOrigin = `chrome-extension://${chrome.runtime.id}`;
+    return sender.url.startsWith(extensionOrigin);
+  }
+
   // -- Message handling ----------------------------------------------------
 
   handleMessage(
@@ -529,6 +575,13 @@ export class Coordinator {
     // are NOT protocol-v2 MessageEnvelopes. Checking isValidMessageEnvelope()
     // before this gate rejects them silently, causing OFFSCREEN_READY timeout.
     if (isOffscreenToSwMessage(message)) {
+      // P1-E: Offscreen messages must originate from the trusted offscreen document
+      if (!this._isTrustedOffscreen(sender)) {
+        console.warn('[Coordinator] P1-E: Offscreen message rejected — untrusted sender',
+          { id: sender?.id, url: sender?.url, tab: sender?.tab?.id });
+        sendResponse({ ack: false, error: 'Untrusted sender for offscreen message' });
+        return;
+      }
       this._handleOffscreenMessage(message);
       sendResponse({ ack: true });
       return;
@@ -541,6 +594,12 @@ export class Coordinator {
     // Only this exact type string is admitted. Any other non-envelope,
     // non-offscreen message still hits the rejection below.
     if (isSmokeOffscreenTestMessage(message)) {
+      // P1-E: Smoke test must originate from a trusted extension page
+      if (!this._isTrustedExtensionPage(sender)) {
+        console.warn('[Coordinator] P1-E: Smoke test rejected — untrusted sender');
+        sendResponse({ ack: false, error: 'Untrusted sender' });
+        return;
+      }
       this.handleSmokeOffscreenTest(sendResponse);
       return;
     }
@@ -556,10 +615,24 @@ export class Coordinator {
     // STEP 3: Dispatch by protocol-v2 message type.
     switch (msg.type) {
       case MESSAGE_TYPES.USER_TASK:
+        // P1-E: USER_TASK must originate from trusted extension UI
+        if (!this._isTrustedExtensionUI(sender)) {
+          console.warn('[Coordinator] P1-E: USER_TASK rejected — untrusted sender',
+            { id: sender?.id, url: sender?.url, tab: sender?.tab?.id });
+          sendResponse({ ack: false, error: 'Untrusted sender' });
+          break;
+        }
         this.handleUserTask(msg.payload as UserTaskPayload, sendResponse);
         break;
 
       case MESSAGE_TYPES.SESSION_CONTROL:
+        // P1-E: SESSION_CONTROL must originate from trusted extension UI
+        if (!this._isTrustedExtensionUI(sender)) {
+          console.warn('[Coordinator] P1-E: SESSION_CONTROL rejected — untrusted sender',
+            { id: sender?.id, url: sender?.url, tab: sender?.tab?.id });
+          sendResponse({ ack: false, error: 'Untrusted sender' });
+          break;
+        }
         this.handleSessionControl(
           msg.payload as SessionControlPayload,
           sendResponse,
