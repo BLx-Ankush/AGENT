@@ -19,7 +19,7 @@ import {
 
 import { harvestDOM, getLastHarvestElementMap } from '@antardrishti/scene-graph';
 import { hitTestNode, hitTestMultiPoint } from '@antardrishti/scene-graph';
-import { executeAction, setNodeRegistry, queryTargetCurrentState, verifyTargetBeforeExecution } from './action-executor';
+import { executeAction, setNodeRegistry, queryTargetCurrentState } from './action-executor';
 
 // ── State ────────────────────────────────────────────────────
 
@@ -139,36 +139,9 @@ async function handleExecuteAction(
     return;
   }
 
-  // P1-C TOCTOU: If the coordinator sent an expectedFingerprint,
-  // verify the target IMMEDIATELY before executing the action.
-  // This closes the gap between VERIFY_TARGET and EXECUTE_ACTION.
-  if (p.targetNodeId && p.expectedFingerprint) {
-    const toctouError = verifyTargetBeforeExecution(
-      p.targetNodeId,
-      p.expectedFingerprint,
-    );
-    if (toctouError) {
-      console.error('[ANTARDRISHTI] P1-C TOCTOU REJECTION:', toctouError);
-      // Report failure back to coordinator
-      chrome.runtime
-        .sendMessage(
-          createMessage(
-            MESSAGE_TYPES.ACTION_OUTCOME,
-            {
-              actionId: p.actionId,
-              success: false,
-              outcome: 'toctou_rejected',
-              error: toctouError,
-            },
-            'content',
-          ),
-        )
-        .catch(() => {});
-      sendResponse({ ack: false, error: toctouError });
-      return;
-    }
-  }
-
+  // P1-C: executeAction now handles TOCTOU internally —
+  // it verifies the fingerprint IMMEDIATELY before each DOM mutation,
+  // and fails closed if expectedFingerprint is missing for target-bound actions.
   const result = await executeAction(p);
 
   // Report outcome back to coordinator
