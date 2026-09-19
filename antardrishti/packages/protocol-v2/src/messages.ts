@@ -23,6 +23,7 @@ export const MESSAGE_TYPES = {
   REQUEST_SNAPSHOT: 'background:request-snapshot',
   EXECUTE_ACTION: 'background:execute-action',
   REQUEST_HIT_TEST: 'background:request-hit-test',
+  VERIFY_TARGET: 'background:verify-target',
 
   // Background → UI
   STATUS_UPDATE: 'background:status-update',

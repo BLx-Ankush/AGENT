@@ -1139,11 +1139,62 @@ export class Coordinator {
         // P1-C: FINAL FRESHNESS CHECK — immediately before execution
         // This runs AFTER confirmation (P0-A) and BEFORE execution.
         // A user approval MUST NOT substitute for freshness validation.
+        //
+        // For target-bound actions: query the content script for the CURRENT
+        // state of the exact harvested element (P0-B registry lookup).
+        // Compare against original fingerprint to detect DOM mutations.
+        const targetNodeId = 'targetNodeId' in action ? action.targetNodeId : undefined;
+        let currentTargetState: {
+          role: string; name: string; ancestry: string;
+          bbox: { x: number; y: number; w: number; h: number };
+          frameId: number; documentGeneration: string;
+        } | undefined;
+
+        if (targetNodeId) {
+          try {
+            const verifyResult = await chrome.tabs.sendMessage(
+              payload.tabId,
+              createMessage(
+                MESSAGE_TYPES.VERIFY_TARGET,
+                { nodeId: targetNodeId },
+                'background',
+              ),
+            ) as { found?: boolean; error?: string; role?: string;
+                    name?: string; ancestry?: string;
+                    bbox?: { x: number; y: number; w: number; h: number };
+                    frameId?: number; documentGeneration?: string };
+
+            if (!verifyResult || !verifyResult.found) {
+              const reason = verifyResult?.error || 'Target element no longer exists';
+              console.error('[Coordinator] P1-C: TARGET LOST:', reason);
+              sendResponse({ ack: false, error: `Target lost: ${reason}` });
+              this.setPhase('idle');
+              return;
+            }
+
+            currentTargetState = {
+              role: verifyResult.role!,
+              name: verifyResult.name!,
+              ancestry: verifyResult.ancestry!,
+              bbox: verifyResult.bbox!,
+              frameId: verifyResult.frameId!,
+              documentGeneration: verifyResult.documentGeneration!,
+            };
+          } catch (verifyErr) {
+            // Content script unreachable → fail closed
+            console.error('[Coordinator] P1-C: VERIFY_TARGET failed (fail closed):', verifyErr);
+            sendResponse({ ack: false, error: 'Target verification failed — content script unreachable' });
+            this.setPhase('idle');
+            return;
+          }
+        }
+
         const freshnessError = checkActionFreshness(
           action,
           currentFreshness,
           plannerResponse.observationId,
           targetFingerprints,
+          currentTargetState,
         );
         if (freshnessError) {
           console.error('[Coordinator] P1-C: STALE ACTION REJECTED:', freshnessError);
