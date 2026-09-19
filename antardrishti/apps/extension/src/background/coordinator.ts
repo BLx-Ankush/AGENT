@@ -82,6 +82,11 @@ const STATE_CHANGING_ACTIONS = new Set([
 // are rejected (fail closed).
 const CONFIRMATION_TIMEOUT_MS = 60_000;
 
+// ── P1-E: Sender authentication ─────────────────────────────
+// Trusted extension UI pages live at chrome-extension://<id>/popup.html
+// Content scripts have sender.tab set; extension pages do NOT.
+const TRUSTED_UI_PATHS = ['/popup.html'];
+
 // ── State ────────────────────────────────────────────────────
 
 interface CoordinatorState {
@@ -443,6 +448,75 @@ export class Coordinator {
     }
   }
 
+  // ── P1-E: Sender Authentication ──────────────────────────────
+  //
+  // Invariant: untrusted content-script / web page content must NEVER
+  // be able to authorize a high-risk action.
+  //
+  // The coordinator authenticates the actual Chrome runtime sender,
+  // NOT the claimed envelope.sender field.
+
+  /**
+   * Verify that the runtime sender is a trusted extension UI page
+   * (e.g. popup.html). Used for CONFIRMATION_RESPONSE authorization.
+   *
+   * Checks:
+   * 1. sender exists
+   * 2. sender.id === chrome.runtime.id (same extension)
+   * 3. sender.url starts with this extension's origin
+   * 4. sender.url path matches a trusted UI page
+   * 5. sender.tab is NOT set (extension pages don't have sender.tab;
+   *    content scripts DO — this distinguishes them)
+   */
+  private _isTrustedExtensionUI(sender: chrome.runtime.MessageSender): boolean {
+    if (!sender || !sender.id || !sender.url) return false;
+
+    // Must be from the same extension package
+    if (sender.id !== chrome.runtime.id) return false;
+
+    // Content scripts have sender.tab — extension UI pages do NOT
+    if (sender.tab) return false;
+
+    // Verify the URL belongs to this extension's origin
+    const extensionOrigin = `chrome-extension://${chrome.runtime.id}`;
+    if (!sender.url.startsWith(extensionOrigin)) return false;
+
+    // Verify the path matches a trusted UI page
+    try {
+      const senderPath = new URL(sender.url).pathname;
+      if (!TRUSTED_UI_PATHS.includes(senderPath)) return false;
+    } catch {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Verify that the runtime sender is a trusted content-script
+   * running in the active session tab. Used for ACTION_OUTCOME.
+   *
+   * Checks:
+   * 1. sender exists
+   * 2. sender.id === chrome.runtime.id (same extension)
+   * 3. sender.tab exists (content scripts always have sender.tab)
+   * 4. sender.tab.id === active session tab ID
+   */
+  private _isTrustedContentScript(sender: chrome.runtime.MessageSender): boolean {
+    if (!sender || !sender.id) return false;
+
+    // Must be from the same extension package
+    if (sender.id !== chrome.runtime.id) return false;
+
+    // Content scripts must have sender.tab
+    if (!sender.tab || sender.tab.id === undefined) return false;
+
+    // Must be from the active session tab
+    if (sender.tab.id !== this.state.activeTabId) return false;
+
+    return true;
+  }
+
   // -- Message handling ----------------------------------------------------
 
   handleMessage(
@@ -501,15 +575,31 @@ export class Coordinator {
         break;
 
       case MESSAGE_TYPES.CONFIRMATION_RESPONSE:
+        // P1-E: CONFIRMATION_RESPONSE must originate from trusted extension UI
+        if (!this._isTrustedExtensionUI(sender)) {
+          console.warn('[Coordinator] P1-E: CONFIRMATION_RESPONSE rejected — untrusted sender',
+            { id: sender?.id, url: sender?.url, tab: sender?.tab?.id });
+          sendResponse({ ack: false, error: 'Untrusted sender' });
+          break;
+        }
         this.handleConfirmationResponse(
           msg.payload as ConfirmationResponsePayload,
+          sender,
           sendResponse,
         );
         break;
 
       case MESSAGE_TYPES.ACTION_OUTCOME:
+        // P1-E: ACTION_OUTCOME must originate from trusted content-script in active session tab
+        if (!this._isTrustedContentScript(sender)) {
+          console.warn('[Coordinator] P1-E: ACTION_OUTCOME rejected — untrusted sender',
+            { id: sender?.id, url: sender?.url, tab: sender?.tab?.id });
+          sendResponse({ ack: false, error: 'Untrusted sender' });
+          break;
+        }
         this.handleActionOutcome(
           msg.payload as ActionOutcomePayload,
+          sender,
           sendResponse,
         );
         break;
@@ -1191,6 +1281,7 @@ export class Coordinator {
    */
   private handleConfirmationResponse(
     payload: ConfirmationResponsePayload,
+    _sender: chrome.runtime.MessageSender,
     sendResponse: (r: unknown) => void,
   ): void {
     const pending = this.pendingConfirmations.get(payload.actionId);
@@ -1220,6 +1311,7 @@ export class Coordinator {
 
   private handleActionOutcome(
     payload: ActionOutcomePayload,
+    _sender: chrome.runtime.MessageSender,
     sendResponse: (r: unknown) => void,
   ): void {
     console.log('[Coordinator] Action outcome:', {
