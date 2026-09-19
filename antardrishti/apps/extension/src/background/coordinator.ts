@@ -47,7 +47,7 @@ import {
   type PlannerResponse,
 } from '@antardrishti/planner';
 import { validatePlan, checkActionFreshness, type SceneContext } from '@antardrishti/planner';
-import { createTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
+import { createTargetFingerprint, verifyTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
 import {
   PerceptionPipeline,
   type PerceptionResult,
@@ -1056,16 +1056,16 @@ export class Coordinator {
       );
 
       // P1-C: Build target fingerprints from harvested scene nodes
+      // Uses ancestryFingerprint which is the canonical ancestry string
+      // produced by getAncestorTags().join('>') during harvesting.
       const targetFingerprints = new Map<string, TargetFingerprint>();
       for (const node of (harvestResult?.nodes || [])) {
         if (node && node.id) {
-          // Build ancestry from tag chain if available
-          const ancestry = node.ancestry || node.tag || '';
           targetFingerprints.set(node.id, createTargetFingerprint(
             node.id,
             node.role || '',
             node.name || '',
-            ancestry,
+            node.ancestryFingerprint || '',
             node.bbox || { x: 0, y: 0, w: 0, h: 0 },
             node.frameId ?? 0,
             node.documentGeneration || captureResult.stamp.documentGeneration,
@@ -1144,11 +1144,7 @@ export class Coordinator {
         // state of the exact harvested element (P0-B registry lookup).
         // Compare against original fingerprint to detect DOM mutations.
         const targetNodeId = 'targetNodeId' in action ? action.targetNodeId : undefined;
-        let currentTargetState: {
-          role: string; name: string; ancestry: string;
-          bbox: { x: number; y: number; w: number; h: number };
-          frameId: number; documentGeneration: string;
-        } | undefined;
+        let verifiedFingerprint: TargetFingerprint | undefined;
 
         if (targetNodeId) {
           try {
@@ -1159,12 +1155,10 @@ export class Coordinator {
                 { nodeId: targetNodeId },
                 'background',
               ),
-            ) as { found?: boolean; error?: string; role?: string;
-                    name?: string; ancestry?: string;
-                    bbox?: { x: number; y: number; w: number; h: number };
-                    frameId?: number; documentGeneration?: string };
+            ) as { found?: boolean; error?: string;
+                    fingerprint?: TargetFingerprint };
 
-            if (!verifyResult || !verifyResult.found) {
+            if (!verifyResult || !verifyResult.found || !verifyResult.fingerprint) {
               const reason = verifyResult?.error || 'Target element no longer exists';
               console.error('[Coordinator] P1-C: TARGET LOST:', reason);
               sendResponse({ ack: false, error: `Target lost: ${reason}` });
@@ -1172,14 +1166,19 @@ export class Coordinator {
               return;
             }
 
-            currentTargetState = {
-              role: verifyResult.role!,
-              name: verifyResult.name!,
-              ancestry: verifyResult.ancestry!,
-              bbox: verifyResult.bbox!,
-              frameId: verifyResult.frameId!,
-              documentGeneration: verifyResult.documentGeneration!,
-            };
+            verifiedFingerprint = verifyResult.fingerprint;
+
+            // Compare current fingerprint against original harvest fingerprint
+            const originalFp = targetFingerprints.get(targetNodeId);
+            if (originalFp) {
+              const mismatch = verifyTargetFingerprint(originalFp, verifiedFingerprint);
+              if (mismatch) {
+                console.error('[Coordinator] P1-C: TARGET STALE:', mismatch);
+                sendResponse({ ack: false, error: `Stale target: ${mismatch}` });
+                this.setPhase('idle');
+                return;
+              }
+            }
           } catch (verifyErr) {
             // Content script unreachable → fail closed
             console.error('[Coordinator] P1-C: VERIFY_TARGET failed (fail closed):', verifyErr);
@@ -1194,7 +1193,6 @@ export class Coordinator {
           currentFreshness,
           plannerResponse.observationId,
           targetFingerprints,
-          currentTargetState,
         );
         if (freshnessError) {
           console.error('[Coordinator] P1-C: STALE ACTION REJECTED:', freshnessError);
@@ -1216,6 +1214,7 @@ export class Coordinator {
           action,
           captureResult.stamp.documentGeneration,
           captureResult.stamp.topOrigin,
+          verifiedFingerprint,
         );
         executedActionCount++;
 
@@ -1287,6 +1286,7 @@ export class Coordinator {
     action: any,
     documentGeneration: string,
     origin: string,
+    expectedFingerprint?: TargetFingerprint,
   ): Promise<void> {
     try {
       // TOKEN REDEMPTION (contract §12):
@@ -1323,6 +1323,9 @@ export class Coordinator {
           // or safe text for type_text. NEVER the raw planner token.
           value: resolvedValue,
           expectedRole: action.expectedRole,
+          // P1-C TOCTOU: pass the verified fingerprint so content-side
+          // can revalidate immediately before the DOM mutation.
+          expectedFingerprint,
         },
         'background',
       ));
