@@ -10,6 +10,18 @@
  * action targets by stable node ID.
  */
 
+import {
+  type TargetFingerprint,
+  createTargetFingerprint,
+  verifyTargetFingerprint,
+} from '@antardrishti/protocol-v2';
+import {
+  computeAncestryFingerprint,
+  inferRole as sceneGraphInferRole,
+  computeAccessibleName as sceneGraphComputeAccessibleName,
+  getAncestorTags,
+} from '@antardrishti/scene-graph';
+
 // ── Node registry (populated by harvester) ───────────────────
 
 const nodeRegistry = new Map<string, HTMLElement>();
@@ -311,20 +323,8 @@ async function executeWait(
   return { actionId, success: true, outcome: 'success' };
 }
 
-// ── Target resolution ────────────────────────────────────────
-
 function resolveTarget(nodeId: string): HTMLElement | null {
   return nodeRegistry.get(nodeId) || null;
-}
-
-function inferRole(el: HTMLElement): string {
-  const tag = el.tagName.toLowerCase();
-  if (tag === 'a') return 'link';
-  if (tag === 'button') return 'button';
-  if (tag === 'input') return 'textbox';
-  if (tag === 'select') return 'combobox';
-  if (tag === 'textarea') return 'textbox';
-  return 'generic';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -336,15 +336,13 @@ function sleep(ms: number): Promise<void> {
 /**
  * Current state of a target element, read from the live DOM
  * via the P0-B authoritative registry.
+ *
+ * Uses the SAME inferRole, computeAccessibleName, getAncestorTags
+ * as the harvester to guarantee ancestry/name/role consistency.
  */
 export interface TargetCurrentState {
   found: true;
-  role: string;
-  name: string;
-  ancestry: string;
-  bbox: { x: number; y: number; w: number; h: number };
-  frameId: number;
-  documentGeneration: string;
+  fingerprint: TargetFingerprint;
 }
 
 export interface TargetNotFound {
@@ -360,7 +358,8 @@ export interface TargetNotFound {
  * If the exact harvested element is no longer in the registry → not found.
  * If the element has been removed from the DOM → not found.
  *
- * Returns the CURRENT properties read from the live element.
+ * Returns a TargetFingerprint built with the SAME functions used by
+ * the harvester, ensuring consistency.
  */
 export function queryTargetCurrentState(
   nodeId: string,
@@ -375,9 +374,22 @@ export function queryTargetCurrentState(
     return { found: false, error: `Node ${nodeId} removed from DOM` };
   }
 
-  const role = el.getAttribute('role') || inferRole(el);
-  const name = computeAccessibleName(el);
-  const ancestry = computeAncestry(el);
+  const fingerprint = buildFingerprintFromElement(nodeId, el);
+  return { found: true, fingerprint };
+}
+
+/**
+ * Build a TargetFingerprint from the CURRENT live element using the
+ * exact same functions the harvester used at observation time.
+ */
+function buildFingerprintFromElement(
+  nodeId: string,
+  el: HTMLElement,
+): TargetFingerprint {
+  const role = sceneGraphInferRole(el);
+  const name = sceneGraphComputeAccessibleName(el);
+  const ancestorTags = getAncestorTags(el);
+  const ancestry = computeAncestryFingerprint(ancestorTags);
   const rect = el.getBoundingClientRect();
   const bbox = {
     x: Math.round(rect.x),
@@ -386,58 +398,38 @@ export function queryTargetCurrentState(
     h: Math.round(rect.height),
   };
 
-  return {
-    found: true,
-    role,
-    name,
-    ancestry,
-    bbox,
-    frameId: 0, // top frame
-    documentGeneration: registryGeneration,
-  };
+  return createTargetFingerprint(
+    nodeId, role, name, ancestry, bbox, 0, registryGeneration, '',
+  );
 }
 
-/** Compute the accessible name of an element. */
-function computeAccessibleName(el: HTMLElement): string {
-  // aria-label has highest priority
-  const ariaLabel = el.getAttribute('aria-label');
-  if (ariaLabel) return ariaLabel;
+// ── P1-C TOCTOU: Content-side final validation ───────────────
 
-  // aria-labelledby
-  const labelledBy = el.getAttribute('aria-labelledby');
-  if (labelledBy) {
-    const labelEl = document.getElementById(labelledBy);
-    if (labelEl) return labelEl.textContent?.trim() || '';
+/**
+ * P1-C TOCTOU defense: verify the target element has not mutated
+ * between the background VERIFY_TARGET check and this content-side
+ * execution. Called IMMEDIATELY before the DOM mutation.
+ *
+ * @param nodeId - The target node ID
+ * @param expectedFingerprint - The fingerprint from VERIFY_TARGET
+ * @returns null if valid, or an error string if stale
+ */
+export function verifyTargetBeforeExecution(
+  nodeId: string,
+  expectedFingerprint: TargetFingerprint,
+): string | null {
+  const el = nodeRegistry.get(nodeId);
+  if (!el) {
+    return `TOCTOU: node ${nodeId} no longer in P0-B registry`;
+  }
+  if (!el.isConnected) {
+    return `TOCTOU: node ${nodeId} removed from DOM`;
   }
 
-  // For inputs, check associated label
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-    if (el.labels && el.labels.length > 0) {
-      return el.labels[0].textContent?.trim() || '';
-    }
-    if (el.placeholder) return el.placeholder;
+  const currentFp = buildFingerprintFromElement(nodeId, el);
+  const match = verifyTargetFingerprint(expectedFingerprint, currentFp);
+  if (!match) {
+    return `TOCTOU: target mutated between verification and execution`;
   }
-
-  // For buttons and links, use text content
-  if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement) {
-    return el.textContent?.trim() || '';
-  }
-
-  // title attribute
-  if (el.title) return el.title;
-
-  // Visible text (truncated)
-  const text = el.textContent?.trim() || '';
-  return text.substring(0, 200);
-}
-
-/** Build a parent ancestry path string. */
-function computeAncestry(el: HTMLElement): string {
-  const parts: string[] = [];
-  let current: HTMLElement | null = el.parentElement;
-  while (current && current !== document.body?.parentElement) {
-    parts.unshift(current.tagName.toLowerCase());
-    current = current.parentElement;
-  }
-  return parts.join('>');
+  return null;
 }

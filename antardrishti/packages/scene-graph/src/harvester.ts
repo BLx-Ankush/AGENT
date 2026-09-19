@@ -268,7 +268,7 @@ function harvestElement(
 
 // ── Role inference ───────────────────────────────────────────
 
-function inferRole(el: HTMLElement): string {
+export function inferRole(el: HTMLElement): string {
   const explicit = el.getAttribute('role');
   if (explicit) return explicit;
 
@@ -313,7 +313,7 @@ function inferRole(el: HTMLElement): string {
 
 // ── Accessible name ──────────────────────────────────────────
 
-function computeAccessibleName(el: HTMLElement): string {
+export function computeAccessibleName(el: HTMLElement): string {
   // aria-label
   const ariaLabel = el.getAttribute('aria-label');
   if (ariaLabel) return ariaLabel.trim();
@@ -485,7 +485,7 @@ function getVisibleText(el: HTMLElement): string {
   return text.substring(0, MAX_TEXT_LENGTH);
 }
 
-function getAncestorTags(el: HTMLElement): string[] {
+export function getAncestorTags(el: HTMLElement): string[] {
   const tags: string[] = [];
   let current: HTMLElement | null = el.parentElement;
   while (current && tags.length < 10) {
