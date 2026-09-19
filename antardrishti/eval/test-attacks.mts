@@ -12,7 +12,15 @@ import { TokenVault } from '@antardrishti/privacy';
 import { Sanitizer } from '@antardrishti/privacy';
 import { EgressVerifier } from '@antardrishti/egress-verifier';
 import { validatePlan, type SceneContext } from '@antardrishti/planner';
-import { scanForForbiddenFields } from '@antardrishti/protocol-v2';
+import { scanForForbiddenFields, createTargetFingerprint } from '@antardrishti/protocol-v2';
+
+// P1-C helper: build a minimal target fingerprint for attack tests
+function fp(nodeId: string, obsId: string, docGen: string) {
+  return createTargetFingerprint(
+    nodeId, 'button', 'Test', 'body>div', { x: 0, y: 0, w: 100, h: 30 },
+    0, docGen, obsId,
+  );
+}
 
 let passed = 0;
 let failed = 0;
@@ -55,12 +63,14 @@ test('A01: Stale plan rejected when document generation changes', () => {
       origin: 'https://example.com',
       createdAt: new Date().toISOString(),
     },
+    targetFingerprints: new Map([['node-1', fp('node-1', 'obs-2', 'gen-NEW')]]),
+    planObservationId: 'obs-2',
+    tokenValidator: () => true,
   };
 
-  // Plan was made for obs-1, but context has obs-2
+  // P1-C: plan was from obs-2 and context is obs-2 — node exists, should pass
   const result = validatePlan(actions, context);
-  // This should pass since we're checking node existence
-  assert(result.valid, 'Node exists, should pass target check');
+  assert(result.valid, 'Node exists with matching observation, should pass target check');
 });
 
 test('A02: Plan with non-existent node rejected', () => {
@@ -75,6 +85,12 @@ test('A02: Plan with non-existent node rejected', () => {
       observationId: 'obs-1', origin: 'https://example.com',
       createdAt: new Date().toISOString(),
     },
+    targetFingerprints: new Map([
+      ['node-1', fp('node-1', 'obs-1', 'gen-1')],
+      ['node-2', fp('node-2', 'obs-1', 'gen-1')],
+    ]),
+    planObservationId: 'obs-1',
+    tokenValidator: () => true,
   };
 
   const result = validatePlan(actions, context);
@@ -216,6 +232,9 @@ test('A10: eval action rejected', () => {
       observationId: 'obs-1', origin: 'https://example.com',
       createdAt: new Date().toISOString(),
     },
+    targetFingerprints: new Map(),
+    planObservationId: 'obs-1',
+    tokenValidator: () => true,
   };
 
   const result = validatePlan(actions, context);
@@ -234,6 +253,9 @@ test('A11: navigate action rejected', () => {
       observationId: 'obs-1', origin: 'https://example.com',
       createdAt: new Date().toISOString(),
     },
+    targetFingerprints: new Map(),
+    planObservationId: 'obs-1',
+    tokenValidator: () => true,
   };
 
   const result = validatePlan(actions, context);
@@ -257,6 +279,9 @@ test('A12: type_text with JavaScript injection rejected', () => {
       observationId: 'obs-1', origin: 'https://example.com',
       createdAt: new Date().toISOString(),
     },
+    targetFingerprints: new Map([['node-1', fp('node-1', 'obs-1', 'gen-1')]]),
+    planObservationId: 'obs-1',
+    tokenValidator: () => true,
   };
 
   const result = validatePlan(actions, context);

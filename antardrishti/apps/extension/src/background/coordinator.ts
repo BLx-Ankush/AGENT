@@ -46,7 +46,8 @@ import {
   type PlannerRequestInput,
   type PlannerResponse,
 } from '@antardrishti/planner';
-import { validatePlan, type SceneContext } from '@antardrishti/planner';
+import { validatePlan, checkActionFreshness, type SceneContext } from '@antardrishti/planner';
+import { createTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
 import {
   PerceptionPipeline,
   type PerceptionResult,
@@ -1053,18 +1054,42 @@ export class Coordinator {
       const nodeIds = new Set(
         sanitized.scene.nodes.map((n) => n.id),
       );
+
+      // P1-C: Build target fingerprints from harvested scene nodes
+      const targetFingerprints = new Map<string, TargetFingerprint>();
+      for (const node of (harvestResult?.nodes || [])) {
+        if (node && node.id) {
+          // Build ancestry from tag chain if available
+          const ancestry = node.ancestry || node.tag || '';
+          targetFingerprints.set(node.id, createTargetFingerprint(
+            node.id,
+            node.role || '',
+            node.name || '',
+            ancestry,
+            node.bbox || { x: 0, y: 0, w: 0, h: 0 },
+            node.frameId ?? 0,
+            node.documentGeneration || captureResult.stamp.documentGeneration,
+            (node.observationId || captureResult.observationId) as string,
+          ));
+        }
+      }
+
+      const currentFreshness = {
+        sessionId: this.state.sessionId!,
+        tabId: payload.tabId,
+        frameId: 0,
+        documentGeneration: captureResult.stamp.documentGeneration,
+        viewportFingerprint: `${captureResult.width}x${captureResult.height}`,
+        observationId: captureResult.observationId,
+        origin: captureResult.stamp.topOrigin,
+        createdAt: new Date().toISOString(),
+      };
+
       const sceneContext: SceneContext = {
         nodeIds,
-        freshness: {
-          sessionId: this.state.sessionId!,
-          tabId: payload.tabId,
-          frameId: 0,
-          documentGeneration: captureResult.stamp.documentGeneration,
-          viewportFingerprint: `${captureResult.width}x${captureResult.height}`,
-          observationId: captureResult.observationId,
-          origin: captureResult.stamp.topOrigin,
-          createdAt: new Date().toISOString(),
-        },
+        freshness: currentFreshness,
+        targetFingerprints,
+        planObservationId: captureResult.observationId as string,
         tokenValidator: (token: string) => this.vault.hasToken(token),
       };
 
@@ -1109,6 +1134,22 @@ export class Coordinator {
           }
           console.log('[Coordinator] P0-A: Action APPROVED:', action.id);
           this.setPhase('executing');
+        }
+
+        // P1-C: FINAL FRESHNESS CHECK — immediately before execution
+        // This runs AFTER confirmation (P0-A) and BEFORE execution.
+        // A user approval MUST NOT substitute for freshness validation.
+        const freshnessError = checkActionFreshness(
+          action,
+          currentFreshness,
+          plannerResponse.observationId,
+          targetFingerprints,
+        );
+        if (freshnessError) {
+          console.error('[Coordinator] P1-C: STALE ACTION REJECTED:', freshnessError);
+          sendResponse({ ack: false, error: `Stale action: ${freshnessError}` });
+          this.setPhase('idle');
+          return;
         }
 
         if (isStateChanging && executedStateChangingAction) {

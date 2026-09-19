@@ -16,6 +16,8 @@ import {
   requiresConfirmation,
   classifyActionRisk,
   type FreshnessBinding,
+  type TargetFingerprint,
+  verifyTargetFingerprint,
 } from '@antardrishti/protocol-v2';
 
 // ── Validation result ────────────────────────────────────────
@@ -32,6 +34,10 @@ export interface ActionValidation {
 export interface SceneContext {
   nodeIds: Set<string>;
   freshness: FreshnessBinding;
+  /** P1-C: Target fingerprints from current observation, keyed by nodeId */
+  targetFingerprints: Map<string, TargetFingerprint>;
+  /** P1-C: The observationId from the planner response */
+  planObservationId: string;
   tokenValidator: (token: string) => boolean;
   targetContext?: Map<string, {
     isSubmit?: boolean;
@@ -47,6 +53,8 @@ export interface SceneContext {
 /**
  * Validate a planner action against the current scene context.
  * Rejects stale, invalid, and dangerous actions.
+ *
+ * P1-C: Now validates freshness binding for ALL actions.
  */
 export function validateAction(
   action: AgentAction,
@@ -92,7 +100,32 @@ export function validateAction(
     }
   }
 
-  // 6. Click action with document generation validation
+  // ── P1-C: Freshness binding validation ───────────────────
+
+  // 6. Plan observationId must match current observation
+  if (context.planObservationId !== context.freshness.observationId) {
+    errors.push(`Observation mismatch: plan from ${context.planObservationId}, current ${context.freshness.observationId}`);
+  }
+
+  // 7. Document generation must match for ALL target-bound actions
+  if ('targetNodeId' in action && action.targetNodeId) {
+    // Check target fingerprint
+    const fingerprint = context.targetFingerprints.get(action.targetNodeId);
+    if (!fingerprint) {
+      errors.push(`Missing target fingerprint for ${action.targetNodeId}`);
+    } else {
+      // Verify document generation from fingerprint
+      if (fingerprint.documentGeneration !== context.freshness.documentGeneration) {
+        errors.push('Document generation mismatch — action targets stale document');
+      }
+      // Verify observation binding
+      if (fingerprint.observationId !== context.freshness.observationId) {
+        errors.push('Target fingerprint from different observation');
+      }
+    }
+  }
+
+  // 8. type_token targetDocumentGeneration (legacy compatibility)
   if (action.kind === 'type_token' && action.targetDocumentGeneration) {
     if (action.targetDocumentGeneration !== context.freshness.documentGeneration) {
       errors.push('Document generation mismatch — action targets stale document');
@@ -113,6 +146,75 @@ export function validateAction(
     requiresConfirmation: needsConfirm,
     risk,
   };
+}
+
+// ── P1-C: Final pre-execution freshness check ────────────────
+
+/**
+ * Actions that require a target node for execution.
+ * Non-targeted actions: wait, finish, request_observation, scroll (without container)
+ */
+const TARGET_BOUND_ACTIONS = new Set([
+  'click', 'focus', 'type_text', 'type_token', 'select',
+]);
+
+/**
+ * Final freshness check immediately before execution.
+ * This MUST be called AFTER confirmation (P0-A) and BEFORE execution.
+ *
+ * Returns null if fresh, or an error string if stale.
+ *
+ * P1-C invariant: a user approval MUST NOT substitute for freshness validation.
+ */
+export function checkActionFreshness(
+  action: AgentAction,
+  currentFreshness: FreshnessBinding,
+  planObservationId: string,
+  targetFingerprints: Map<string, TargetFingerprint>,
+  currentTargetState?: {
+    role: string;
+    name: string;
+    ancestry: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    frameId: number;
+    documentGeneration: string;
+  },
+): string | null {
+  // 1. Observation binding
+  if (planObservationId !== currentFreshness.observationId) {
+    return `Stale observation: plan from ${planObservationId}, current ${currentFreshness.observationId}`;
+  }
+
+  // 2. Session binding
+  if (!currentFreshness.sessionId) {
+    return 'Missing session binding';
+  }
+
+  // 3. Document generation binding
+  const isTargetBound = TARGET_BOUND_ACTIONS.has(action.kind);
+  const targetNodeId = 'targetNodeId' in action ? action.targetNodeId : undefined;
+
+  if (isTargetBound && targetNodeId) {
+    const fingerprint = targetFingerprints.get(targetNodeId);
+    if (!fingerprint) {
+      return `Missing target fingerprint for ${targetNodeId}`;
+    }
+
+    // Document generation must match
+    if (fingerprint.documentGeneration !== currentFreshness.documentGeneration) {
+      return 'Document generation changed since observation';
+    }
+
+    // If current target state is provided, verify fingerprint
+    if (currentTargetState) {
+      const mismatch = verifyTargetFingerprint(fingerprint, currentTargetState);
+      if (mismatch) {
+        return `Target stale: ${mismatch}`;
+      }
+    }
+  }
+
+  return null; // fresh
 }
 
 /**
