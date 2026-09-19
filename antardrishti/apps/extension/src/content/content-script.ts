@@ -19,7 +19,7 @@ import {
 
 import { harvestDOM, getLastHarvestElementMap } from '@antardrishti/scene-graph';
 import { hitTestNode, hitTestMultiPoint } from '@antardrishti/scene-graph';
-import { executeAction, setNodeRegistry } from './action-executor';
+import { executeAction, setNodeRegistry, queryTargetCurrentState } from './action-executor';
 
 // ── State ────────────────────────────────────────────────────
 
@@ -63,6 +63,10 @@ chrome.runtime.onMessage.addListener(
 
       case MESSAGE_TYPES.EXECUTE_ACTION:
         handleExecuteAction(msg.payload, sendResponse);
+        break;
+
+      case MESSAGE_TYPES.VERIFY_TARGET:
+        handleVerifyTarget(msg.payload, sendResponse);
         break;
 
       default:
@@ -147,6 +151,22 @@ async function handleExecuteAction(
     )
     .catch(() => {});
 
+  sendResponse({ ack: true, ...result });
+}
+
+// ── P1-C: Target verification ────────────────────────────────
+
+function handleVerifyTarget(
+  payload: unknown,
+  sendResponse: (r: unknown) => void,
+): void {
+  const p = payload as { nodeId?: string };
+  if (!p?.nodeId) {
+    sendResponse({ ack: false, found: false, error: 'Missing nodeId' });
+    return;
+  }
+
+  const result = queryTargetCurrentState(p.nodeId);
   sendResponse({ ack: true, ...result });
 }
 

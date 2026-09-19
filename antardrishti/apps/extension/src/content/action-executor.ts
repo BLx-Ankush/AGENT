@@ -330,3 +330,114 @@ function inferRole(el: HTMLElement): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ── P1-C: Target state query ─────────────────────────────────
+
+/**
+ * Current state of a target element, read from the live DOM
+ * via the P0-B authoritative registry.
+ */
+export interface TargetCurrentState {
+  found: true;
+  role: string;
+  name: string;
+  ancestry: string;
+  bbox: { x: number; y: number; w: number; h: number };
+  frameId: number;
+  documentGeneration: string;
+}
+
+export interface TargetNotFound {
+  found: false;
+  error: string;
+}
+
+/**
+ * Query the CURRENT state of a target element using the P0-B
+ * authoritative nodeId→HTMLElement registry.
+ *
+ * Does NOT re-target, does NOT use selectors, does NOT "find similar".
+ * If the exact harvested element is no longer in the registry → not found.
+ * If the element has been removed from the DOM → not found.
+ *
+ * Returns the CURRENT properties read from the live element.
+ */
+export function queryTargetCurrentState(
+  nodeId: string,
+): TargetCurrentState | TargetNotFound {
+  const el = nodeRegistry.get(nodeId);
+  if (!el) {
+    return { found: false, error: `Node ${nodeId} not in P0-B registry` };
+  }
+
+  // Verify element is still connected to the DOM
+  if (!el.isConnected) {
+    return { found: false, error: `Node ${nodeId} removed from DOM` };
+  }
+
+  const role = el.getAttribute('role') || inferRole(el);
+  const name = computeAccessibleName(el);
+  const ancestry = computeAncestry(el);
+  const rect = el.getBoundingClientRect();
+  const bbox = {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    w: Math.round(rect.width),
+    h: Math.round(rect.height),
+  };
+
+  return {
+    found: true,
+    role,
+    name,
+    ancestry,
+    bbox,
+    frameId: 0, // top frame
+    documentGeneration: registryGeneration,
+  };
+}
+
+/** Compute the accessible name of an element. */
+function computeAccessibleName(el: HTMLElement): string {
+  // aria-label has highest priority
+  const ariaLabel = el.getAttribute('aria-label');
+  if (ariaLabel) return ariaLabel;
+
+  // aria-labelledby
+  const labelledBy = el.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const labelEl = document.getElementById(labelledBy);
+    if (labelEl) return labelEl.textContent?.trim() || '';
+  }
+
+  // For inputs, check associated label
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    if (el.labels && el.labels.length > 0) {
+      return el.labels[0].textContent?.trim() || '';
+    }
+    if (el.placeholder) return el.placeholder;
+  }
+
+  // For buttons and links, use text content
+  if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement) {
+    return el.textContent?.trim() || '';
+  }
+
+  // title attribute
+  if (el.title) return el.title;
+
+  // Visible text (truncated)
+  const text = el.textContent?.trim() || '';
+  return text.substring(0, 200);
+}
+
+/** Build a parent ancestry path string. */
+function computeAncestry(el: HTMLElement): string {
+  const parts: string[] = [];
+  let current: HTMLElement | null = el.parentElement;
+  while (current && current !== document.body?.parentElement) {
+    parts.unshift(current.tagName.toLowerCase());
+    current = current.parentElement;
+  }
+  return parts.join('>');
+}
