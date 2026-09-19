@@ -128,7 +128,8 @@ export interface ActionOutcomePayload {
     | 'failure'
     | 'ambiguous'
     | 'navigated'
-    | 'rejected';
+    | 'rejected'
+    | 'toctou_rejected';
   newDocumentGeneration?: string;
   error?: string;
 }

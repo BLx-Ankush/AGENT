@@ -47,9 +47,17 @@ function createDOM(): JSDOM {
     pretendToBeVisual: true,
   });
 
+  // Use a WeakMap to assign each element a stable position.
+  // Multiple calls on the same element always return the same bbox,
+  // which is required for P1-C TOCTOU fingerprint verification.
   let posCounter = 0;
-  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
-    const pos = posCounter++;
+  const elementPositions = new WeakMap<Element, number>();
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function (this: Element) {
+    let pos = elementPositions.get(this);
+    if (pos === undefined) {
+      pos = posCounter++;
+      elementPositions.set(this, pos);
+    }
     return {
       x: 10, y: 10 + pos * 40, width: 100, height: 30,
       top: 10 + pos * 40, left: 10, bottom: 40 + pos * 40, right: 110,
@@ -159,6 +167,7 @@ await runTest('NI-02: setNodeRegistry + executeAction resolves to the exact harv
   try {
     const { harvestDOM, getLastHarvestElementMap } = await import('@antardrishti/scene-graph');
     const { setNodeRegistry, executeAction } = await import('../apps/extension/src/content/action-executor');
+    const { createTargetFingerprint } = await import('@antardrishti/protocol-v2');
 
     const result = harvestDOM('obs-ni02', 'doc-ni02', 0);
     setNodeRegistry(getLastHarvestElementMap(), 'doc-ni02');
@@ -166,9 +175,23 @@ await runTest('NI-02: setNodeRegistry + executeAction resolves to the exact harv
     const inputNode = result.nodes.find((n: { tag: string }) => n.tag === 'input');
     assert(inputNode, 'Harvest must include <input>');
 
+    // P1-C: Build expectedFingerprint from the harvested node properties
+    // (same approach as the coordinator uses)
+    const expectedFingerprint = createTargetFingerprint(
+      inputNode.id,
+      inputNode.role || '',
+      inputNode.name || '',
+      inputNode.ancestryFingerprint || '',
+      inputNode.bbox || { x: 0, y: 0, w: 0, h: 0 },
+      inputNode.frameId ?? 0,
+      'doc-ni02',
+      'obs-ni02',
+    );
+
     const actionResult = await executeAction({
       actionId: 'test-ni02', kind: 'type_text',
       targetNodeId: inputNode.id, value: 'NI02-test-value',
+      expectedFingerprint,
     });
 
     assert.strictEqual(actionResult.success, true, `Action failed: ${actionResult.error}`);
@@ -245,9 +268,10 @@ await runTest('NI-05: executeAction returns failure for ID not in registry', asy
       actionId: 'test-ni05', kind: 'click', targetNodeId: 'node-99999',
     });
     assert.strictEqual(result.success, false);
-    assert.strictEqual(result.outcome, 'failure');
-    assert(result.error?.includes('not found'), `Expected "not found": ${result.error}`);
-    console.log(`    node-99999 → failure: "${result.error}"`);
+    assert.strictEqual(result.outcome, 'toctou_rejected',
+      'Target-bound action without expectedFingerprint must be toctou_rejected');
+    assert(result.error?.includes('missing expectedFingerprint'), `Expected fail-closed: ${result.error}`);
+    console.log(`    node-99999 → toctou_rejected (fail-closed): "${result.error}"`);
   } finally {
     restoreDOMGlobals(saved);
   }
@@ -269,8 +293,9 @@ await runTest('NI-06: executeAction returns failure for vis-* visual node IDs', 
       actionId: 'test-ni06', kind: 'click', targetNodeId: 'vis-abc12345-1',
     });
     assert.strictEqual(result.success, false, 'vis-* node should not be executable');
-    assert.strictEqual(result.outcome, 'failure');
-    console.log(`    vis-abc12345-1 → failure (fail-closed): "${result.error}"`);
+    assert.strictEqual(result.outcome, 'toctou_rejected',
+      'Target-bound action without expectedFingerprint must be toctou_rejected');
+    console.log(`    vis-abc12345-1 → toctou_rejected (fail-closed): "${result.error}"`);
   } finally {
     restoreDOMGlobals(saved);
   }
@@ -341,6 +366,7 @@ await runTest('NI-08: nodeId resolves to the exact harvested element, not merely
   try {
     const { harvestDOM, getLastHarvestElementMap } = await import('@antardrishti/scene-graph');
     const { setNodeRegistry, executeAction } = await import('../apps/extension/src/content/action-executor');
+    const { createTargetFingerprint } = await import('@antardrishti/protocol-v2');
 
     const result = harvestDOM('obs-ni08', 'doc-ni08', 0);
     const elementMap = getLastHarvestElementMap();
@@ -357,12 +383,25 @@ await runTest('NI-08: nodeId resolves to the exact harvested element, not merely
     assert.strictEqual(harvesterEl, actualInputEl,
       `nodeId ${inputNode.id} must map to input#i1 by object identity`);
 
+    // P1-C: Build expectedFingerprint from harvested node properties
+    const expectedFingerprint = createTargetFingerprint(
+      inputNode.id,
+      inputNode.role || '',
+      inputNode.name || '',
+      inputNode.ancestryFingerprint || '',
+      inputNode.bbox || { x: 0, y: 0, w: 0, h: 0 },
+      inputNode.frameId ?? 0,
+      'doc-ni08',
+      'obs-ni08',
+    );
+
     // Verify correct DOM element was modified through executeAction
     const actionResult = await executeAction({
       actionId: 'test-ni08', kind: 'type_text',
       targetNodeId: inputNode.id, value: 'security-boundary-test',
+      expectedFingerprint,
     });
-    assert.strictEqual(actionResult.success, true);
+    assert.strictEqual(actionResult.success, true, `Action failed: ${actionResult.error}`);
     assert.strictEqual((actualInputEl as HTMLInputElement).value, 'security-boundary-test',
       'Must modify the exact element, not an element at the same numeric position');
 

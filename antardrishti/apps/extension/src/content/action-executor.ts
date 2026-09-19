@@ -49,12 +49,18 @@ export function setNodeRegistry(
   console.log(`[Executor] Registry set from harvester: ${nodeRegistry.size} nodes (gen=${documentGeneration})`);
 }
 
+// ── Target-bound action kinds ────────────────────────────────
+
+const TARGET_BOUND_KINDS = new Set([
+  'click', 'focus', 'type_text', 'type_token', 'select',
+]);
+
 // ── Action result ────────────────────────────────────────────
 
 export interface ActionResult {
   actionId: string;
   success: boolean;
-  outcome: 'success' | 'failure' | 'ambiguous' | 'navigated' | 'rejected';
+  outcome: 'success' | 'failure' | 'ambiguous' | 'navigated' | 'rejected' | 'toctou_rejected';
   newDocumentGeneration?: string;
   error?: string;
 }
@@ -67,25 +73,46 @@ export async function executeAction(payload: {
   targetNodeId?: string;
   value?: string;
   expectedRole?: string;
+  expectedFingerprint?: TargetFingerprint;
 }): Promise<ActionResult> {
-  const { actionId, kind, targetNodeId, value, expectedRole } = payload;
+  const { actionId, kind, targetNodeId, value, expectedRole, expectedFingerprint } = payload;
+
+  // P1-C: Fail closed if target-bound action is missing expectedFingerprint
+  if (TARGET_BOUND_KINDS.has(kind) && targetNodeId) {
+    if (!expectedFingerprint) {
+      return {
+        actionId,
+        success: false,
+        outcome: 'toctou_rejected',
+        error: 'P1-C: missing expectedFingerprint for target-bound action — fail closed',
+      };
+    }
+    if (!expectedFingerprint.nodeId || !expectedFingerprint.role) {
+      return {
+        actionId,
+        success: false,
+        outcome: 'toctou_rejected',
+        error: 'P1-C: malformed expectedFingerprint — fail closed',
+      };
+    }
+  }
 
   try {
     switch (kind) {
       case 'click':
-        return await executeClick(actionId, targetNodeId!, expectedRole);
+        return await executeClick(actionId, targetNodeId!, expectedRole, expectedFingerprint!);
 
       case 'focus':
-        return executeFocus(actionId, targetNodeId!);
+        return executeFocus(actionId, targetNodeId!, expectedFingerprint!);
 
       case 'type_text':
-        return executeTypeText(actionId, targetNodeId!, value || '');
+        return executeTypeText(actionId, targetNodeId!, value || '', expectedFingerprint!);
 
       case 'type_token':
-        return executeTypeToken(actionId, targetNodeId!, value || '');
+        return executeTypeToken(actionId, targetNodeId!, value || '', expectedFingerprint!);
 
       case 'select':
-        return executeSelect(actionId, targetNodeId!, value || '');
+        return executeSelect(actionId, targetNodeId!, value || '', expectedFingerprint!);
 
       case 'scroll':
         return executeScroll(actionId, targetNodeId || undefined, value || 'down:small');
@@ -122,7 +149,8 @@ export async function executeAction(payload: {
 async function executeClick(
   actionId: string,
   targetNodeId: string,
-  expectedRole?: string,
+  expectedRole: string | undefined,
+  expectedFingerprint: TargetFingerprint,
 ): Promise<ActionResult> {
   const el = resolveTarget(targetNodeId);
   if (!el) {
@@ -136,7 +164,7 @@ async function executeClick(
 
   // Verify role if expected
   if (expectedRole) {
-    const actualRole = el.getAttribute('role') || inferRole(el);
+    const actualRole = el.getAttribute('role') || sceneGraphInferRole(el);
     if (actualRole !== expectedRole && expectedRole !== 'generic') {
       console.warn(
         `[Executor] Role mismatch: expected ${expectedRole}, got ${actualRole}`,
@@ -164,6 +192,12 @@ async function executeClick(
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   await sleep(200);
 
+  // P1-C TOCTOU: Final verification IMMEDIATELY before DOM mutation
+  const toctouError = verifyTargetBeforeExecution(targetNodeId, expectedFingerprint);
+  if (toctouError) {
+    return { actionId, success: false, outcome: 'toctou_rejected', error: toctouError };
+  }
+
   // Dispatch click events
   el.focus();
   el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -184,6 +218,7 @@ async function executeClick(
 function executeFocus(
   actionId: string,
   targetNodeId: string,
+  expectedFingerprint: TargetFingerprint,
 ): ActionResult {
   const el = resolveTarget(targetNodeId);
   if (!el) {
@@ -193,6 +228,12 @@ function executeFocus(
       outcome: 'failure',
       error: `Target not found: ${targetNodeId}`,
     };
+  }
+
+  // P1-C TOCTOU: Final verification IMMEDIATELY before focus
+  const toctouError = verifyTargetBeforeExecution(targetNodeId, expectedFingerprint);
+  if (toctouError) {
+    return { actionId, success: false, outcome: 'toctou_rejected', error: toctouError };
   }
 
   el.focus();
@@ -205,6 +246,7 @@ function executeTypeText(
   actionId: string,
   targetNodeId: string,
   text: string,
+  expectedFingerprint: TargetFingerprint,
 ): ActionResult {
   const el = resolveTarget(targetNodeId);
   if (!el) {
@@ -231,6 +273,12 @@ function executeTypeText(
     };
   }
 
+  // P1-C TOCTOU: Final verification IMMEDIATELY before value mutation
+  const toctouError = verifyTargetBeforeExecution(targetNodeId, expectedFingerprint);
+  if (toctouError) {
+    return { actionId, success: false, outcome: 'toctou_rejected', error: toctouError };
+  }
+
   el.focus();
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
@@ -249,6 +297,7 @@ function executeTypeToken(
   actionId: string,
   targetNodeId: string,
   token: string,
+  expectedFingerprint: TargetFingerprint,
 ): ActionResult {
   // Token typing uses the same mechanism as type_text.
   // The actual value is redeemed from the vault by the coordinator
@@ -257,13 +306,14 @@ function executeTypeToken(
   //
   // At this point, `token` is actually the redeemed raw value
   // (the coordinator handles the redemption step).
-  return executeTypeText(actionId, targetNodeId, token);
+  return executeTypeText(actionId, targetNodeId, token, expectedFingerprint);
 }
 
 function executeSelect(
   actionId: string,
   targetNodeId: string,
   optionId: string,
+  expectedFingerprint: TargetFingerprint,
 ): ActionResult {
   const el = resolveTarget(targetNodeId);
   if (!el || !(el instanceof HTMLSelectElement)) {
@@ -285,6 +335,12 @@ function executeSelect(
       outcome: 'failure',
       error: `Option not found: ${optionId}`,
     };
+  }
+
+  // P1-C TOCTOU: Final verification IMMEDIATELY before select mutation
+  const toctouError = verifyTargetBeforeExecution(targetNodeId, expectedFingerprint);
+  if (toctouError) {
+    return { actionId, success: false, outcome: 'toctou_rejected', error: toctouError };
   }
 
   el.value = option.value;
@@ -427,9 +483,9 @@ export function verifyTargetBeforeExecution(
   }
 
   const currentFp = buildFingerprintFromElement(nodeId, el);
-  const match = verifyTargetFingerprint(expectedFingerprint, currentFp);
-  if (!match) {
-    return `TOCTOU: target mutated between verification and execution`;
+  const mismatch = verifyTargetFingerprint(expectedFingerprint, currentFp);
+  if (mismatch) {
+    return `TOCTOU: ${mismatch}`;
   }
   return null;
 }
