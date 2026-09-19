@@ -127,6 +127,32 @@
       <button id="savePlannerConfig" class="btn btn-small">Save Config</button>
     </div>
 
+    <!-- P0-A: Confirmation dialog for high-risk actions -->
+    <div class="confirmation-overlay" id="confirmationOverlay" style="display:none">
+      <div class="confirmation-dialog">
+        <div class="confirmation-icon">⚠️</div>
+        <h3 class="confirmation-title">Action Requires Confirmation</h3>
+        <div class="confirmation-details">
+          <div class="info-row">
+            <span class="info-label">Action:</span>
+            <span class="info-value" id="confirmActionKind">—</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Description:</span>
+            <span class="info-value" id="confirmDescription">—</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Risk:</span>
+            <span class="info-value confirmation-risk" id="confirmRisk">HIGH</span>
+          </div>
+        </div>
+        <div class="confirmation-buttons">
+          <button id="confirmApprove" class="btn btn-primary">Approve</button>
+          <button id="confirmReject" class="btn btn-danger">Reject</button>
+        </div>
+      </div>
+    </div>
+
     <footer class="footer">
       <p class="footer-text">Raw pixels &amp; protected values stay local</p>
     </footer>

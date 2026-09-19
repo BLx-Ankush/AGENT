@@ -18,6 +18,7 @@ import {
   MESSAGE_TYPES,
   type MessageEnvelope,
   type StatusUpdatePayload,
+  type ConfirmationRequestPayload,
 } from '@antardrishti/protocol-v2';
 
 // ── Elements ─────────────────────────────────────────────────
@@ -187,6 +188,12 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
     updateStatus(payload);
   }
 
+  // P0-A: Confirmation request from background
+  if (msg.type === MESSAGE_TYPES.CONFIRMATION_REQUEST) {
+    const payload = msg.payload as ConfirmationRequestPayload;
+    showConfirmationDialog(payload);
+  }
+
   // Model status update
   if ((msg.type as string) === 'MODEL_STATUS_UPDATE') {
     const p = msg.payload as any;
@@ -199,6 +206,42 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
     updatePerceptionEvidence(p);
   }
 });
+
+// ── P0-A: Confirmation Dialog ────────────────────────────────
+
+const confirmOverlay = document.getElementById('confirmationOverlay')!;
+const confirmActionKind = document.getElementById('confirmActionKind')!;
+const confirmDescription = document.getElementById('confirmDescription')!;
+const confirmRisk = document.getElementById('confirmRisk')!;
+const confirmApproveBtn = document.getElementById('confirmApprove') as HTMLButtonElement;
+const confirmRejectBtn = document.getElementById('confirmReject') as HTMLButtonElement;
+
+let pendingConfirmActionId: string | null = null;
+
+function showConfirmationDialog(payload: ConfirmationRequestPayload): void {
+  pendingConfirmActionId = payload.actionId;
+  confirmActionKind.textContent = payload.actionKind;
+  confirmDescription.textContent = payload.targetDescription;
+  confirmRisk.textContent = (payload.risk || 'high').toUpperCase();
+  confirmOverlay.style.display = 'flex';
+}
+
+function sendConfirmationResponse(approved: boolean): void {
+  if (!pendingConfirmActionId) return;
+  const actionId = pendingConfirmActionId;
+  pendingConfirmActionId = null;
+  confirmOverlay.style.display = 'none';
+
+  chrome.runtime.sendMessage(
+    createMessage(MESSAGE_TYPES.CONFIRMATION_RESPONSE, {
+      actionId,
+      approved,
+    }, 'popup'),
+  );
+}
+
+confirmApproveBtn.addEventListener('click', () => sendConfirmationResponse(true));
+confirmRejectBtn.addEventListener('click', () => sendConfirmationResponse(false));
 
 function updateStatus(payload: StatusUpdatePayload): void {
   isActive = payload.isActive;

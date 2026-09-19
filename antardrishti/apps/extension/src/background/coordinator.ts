@@ -32,6 +32,7 @@ import {
   type ConfirmationRequestPayload,
   type ConfirmationResponsePayload,
   type ActionOutcomePayload,
+  type AgentAction,
   ALLOWED_ACTION_KINDS,
 } from '@antardrishti/protocol-v2';
 
@@ -75,6 +76,11 @@ import { CaptureManager } from './capture';
 const STATE_CHANGING_ACTIONS = new Set([
   'click', 'type_text', 'type_token', 'select', 'submit',
 ]);
+
+// ── P0-A: Confirmation timeout ──────────────────────────────
+// High-risk actions that are not confirmed within this window
+// are rejected (fail closed).
+const CONFIRMATION_TIMEOUT_MS = 60_000;
 
 // ── State ────────────────────────────────────────────────────
 
@@ -180,10 +186,16 @@ export class Coordinator {
   // -- Firefox direct-load state ------------------------------------------
   private _loadedModels: LoadedModels | null = null;
 
-  // Pending confirmations
+  // P0-A: Pending confirmation authorizations.
+  // Each entry represents a high-risk action awaiting user decision.
+  // Invariant: an unapproved action executes ZERO times.
   private pendingConfirmations = new Map<
     string,
-    { resolve: (approved: boolean) => void }
+    {
+      resolve: (approved: boolean) => void;
+      sessionId: string;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
   >();
 
   constructor() {
@@ -908,30 +920,33 @@ export class Coordinator {
         return;
       }
 
-      // Check if any action requires user confirmation
-      const needsConfirm = validation.validations.some(
-        (v) => v.requiresConfirmation,
-      );
-
-      if (needsConfirm) {
-        this.setPhase('confirming');
-        const confirmAction = plannerResponse.actions.find(
-          (_, i) => validation.validations[i].requiresConfirmation,
-        );
-        if (confirmAction) {
-          this.requestConfirmation(confirmAction);
-        }
-      }
-
       // ── ONE ACTION → RE-OBSERVE (contract §1.5) ──────────
       // Execute ONLY the first state-changing action.
       // Non-state-changing actions (scroll, wait, finish) can be batched.
+      // P0-A: Confirmation is checked per-action immediately before execution.
       this.setPhase('executing');
       let executedStateChangingAction = false;
       let executedActionCount = 0;
 
-      for (const action of plannerResponse.actions) {
+      for (let actionIdx = 0; actionIdx < plannerResponse.actions.length; actionIdx++) {
+        const action = plannerResponse.actions[actionIdx];
+        const actionValidation = validation.validations[actionIdx];
         const isStateChanging = STATE_CHANGING_ACTIONS.has(action.kind);
+
+        // P0-A: If this action requires confirmation, block until authorized
+        if (actionValidation?.requiresConfirmation) {
+          this.setPhase('confirming');
+          console.log('[Coordinator] P0-A: Requesting confirmation for', action.kind, action.id);
+          const approved = await this.requestConfirmation(action);
+          if (!approved) {
+            console.log('[Coordinator] P0-A: Action REJECTED or timed out:', action.id);
+            sendResponse({ ack: false, error: `Action ${action.kind} rejected by user` });
+            this.setPhase('idle');
+            return;
+          }
+          console.log('[Coordinator] P0-A: Action APPROVED:', action.id);
+          this.setPhase('executing');
+        }
 
         if (isStateChanging && executedStateChangingAction) {
           // Contract §1.5: stop after first state-changing action
@@ -1088,34 +1103,118 @@ export class Coordinator {
     );
   }
 
-  // ── Confirmations ────────────────────────────────────────
+  // ── P0-A: Confirmations ─────────────────────────────────
+  //
+  // Invariant: an unapproved, rejected, unknown, stale-session,
+  // duplicate, timed-out, or failed-dispatch high-risk action
+  // must execute ZERO times.
 
-  private requestConfirmation(action: any): void {
-    const payload: ConfirmationRequestPayload = {
-      actionId: action.id,
-      actionKind: action.kind,
-      targetDescription: action.reason || action.kind,
-      risk: 'high',
-    };
+  /**
+   * Request user confirmation for a high-risk action.
+   *
+   * Returns a Promise<boolean> that resolves:
+   *   true  → user approved (execute exactly once)
+   *   false → user rejected / timeout / dispatch failure / session ended
+   *
+   * The pending entry is created BEFORE dispatching the message.
+   * Dispatch failure resolves false immediately (fail closed).
+   * Duplicate pending actionId fails closed without overwriting.
+   */
+  private requestConfirmation(action: AgentAction): Promise<boolean> {
+    const actionId = action.id;
 
-    chrome.runtime
-      .sendMessage(createMessage(
-        MESSAGE_TYPES.CONFIRMATION_REQUEST,
-        payload,
-        'background',
-      ))
-      .catch(() => {});
+    // Enforce non-empty actionId
+    if (!actionId || typeof actionId !== 'string' || actionId.trim() === '') {
+      console.error('[Coordinator] P0-A: Empty actionId — rejecting');
+      return Promise.resolve(false);
+    }
+
+    // Duplicate pending actionId must fail closed, never overwrite
+    if (this.pendingConfirmations.has(actionId)) {
+      console.error('[Coordinator] P0-A: Duplicate pending actionId', actionId, '— rejecting');
+      return Promise.resolve(false);
+    }
+
+    const sessionId = this.state.sessionId;
+    if (!sessionId) {
+      console.error('[Coordinator] P0-A: No active session — rejecting');
+      return Promise.resolve(false);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      // Timeout: fail closed after CONFIRMATION_TIMEOUT_MS
+      const timeoutId = setTimeout(() => {
+        if (this.pendingConfirmations.has(actionId)) {
+          console.warn('[Coordinator] P0-A: Confirmation TIMEOUT for', actionId);
+          this.pendingConfirmations.delete(actionId);
+          resolve(false);
+        }
+      }, CONFIRMATION_TIMEOUT_MS);
+
+      // Insert pending entry BEFORE dispatching the message
+      this.pendingConfirmations.set(actionId, { resolve, sessionId, timeoutId });
+
+      // Build confirmation payload — NEVER includes raw vault values
+      const payload: ConfirmationRequestPayload = {
+        actionId,
+        actionKind: action.kind,
+        targetDescription: action.reason || action.kind,
+        risk: 'high',
+      };
+
+      // Dispatch to UI — handle failure by resolving false
+      chrome.runtime
+        .sendMessage(createMessage(
+          MESSAGE_TYPES.CONFIRMATION_REQUEST,
+          payload,
+          'background',
+        ))
+        .catch((err) => {
+          console.error('[Coordinator] P0-A: Dispatch failed for', actionId, err);
+          const pending = this.pendingConfirmations.get(actionId);
+          if (pending) {
+            clearTimeout(pending.timeoutId);
+            this.pendingConfirmations.delete(actionId);
+            resolve(false);
+          }
+        });
+    });
   }
 
+  /**
+   * Handle a confirmation response from the UI.
+   *
+   * Security checks:
+   * - Unknown actionId → ignored (no authorization)
+   * - Stale session → rejected (fail closed)
+   * - Duplicate response → no-op (entry already deleted)
+   */
   private handleConfirmationResponse(
     payload: ConfirmationResponsePayload,
     sendResponse: (r: unknown) => void,
   ): void {
     const pending = this.pendingConfirmations.get(payload.actionId);
-    if (pending) {
-      pending.resolve(payload.approved);
-      this.pendingConfirmations.delete(payload.actionId);
+
+    if (!pending) {
+      // Unknown or already-resolved actionId — no-op
+      console.warn('[Coordinator] P0-A: No pending confirmation for', payload.actionId);
+      sendResponse({ ack: true });
+      return;
     }
+
+    // Session binding: reject if session changed since confirmation was requested
+    if (pending.sessionId !== this.state.sessionId) {
+      console.warn('[Coordinator] P0-A: Stale session for', payload.actionId);
+      clearTimeout(pending.timeoutId);
+      this.pendingConfirmations.delete(payload.actionId);
+      pending.resolve(false);
+      sendResponse({ ack: true });
+      return;
+    }
+
+    clearTimeout(pending.timeoutId);
+    this.pendingConfirmations.delete(payload.actionId);
+    pending.resolve(payload.approved);
     sendResponse({ ack: true });
   }
 
@@ -1212,6 +1311,14 @@ export class Coordinator {
 
   private async endSession(): Promise<void> {
     console.log('[Coordinator] Session ended:', this.state.sessionId);
+
+    // P0-A: Reject all pending confirmations — session ended
+    for (const [actionId, pending] of this.pendingConfirmations) {
+      clearTimeout(pending.timeoutId);
+      pending.resolve(false);
+      console.log('[Coordinator] P0-A: Rejected pending confirmation on session end:', actionId);
+    }
+    this.pendingConfirmations.clear();
 
     // Revoke all vault grants for this session
     if (this.state.sessionId) {
