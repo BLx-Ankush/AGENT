@@ -488,6 +488,197 @@ await runTest('SE-16: Wrong-tab ACTION_OUTCOME is rejected and does not advance 
   assert.strictEqual(sm.executedActions.length, 0);
 });
 
+// ── Offscreen Sender Authentication ─────────────────────────
+
+console.log('\n── Offscreen Message Sender Auth ──');
+
+const TRUSTED_OFFSCREEN_PATH = '/offscreen.html';
+
+function isTrustedOffscreen(
+  sender: { id?: string; url?: string; tab?: { id?: number } } | null | undefined,
+  extensionId: string,
+): boolean {
+  if (!sender || !sender.id || !sender.url) return false;
+  if (sender.id !== extensionId) return false;
+  if (sender.tab) return false;
+  const extensionOrigin = `chrome-extension://${extensionId}`;
+  if (!sender.url.startsWith(extensionOrigin)) return false;
+  try {
+    const senderPath = new URL(sender.url).pathname;
+    if (senderPath !== TRUSTED_OFFSCREEN_PATH) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function isTrustedExtensionPage(
+  sender: { id?: string; url?: string; tab?: { id?: number } } | null | undefined,
+  extensionId: string,
+): boolean {
+  if (!sender || !sender.id || !sender.url) return false;
+  if (sender.id !== extensionId) return false;
+  if (sender.tab) return false;
+  const extensionOrigin = `chrome-extension://${extensionId}`;
+  return sender.url.startsWith(extensionOrigin);
+}
+
+/** Trusted offscreen document sender */
+function trustedOffscreenSender() {
+  return {
+    id: EXTENSION_ID,
+    url: `${EXTENSION_ORIGIN}/offscreen.html`,
+  };
+}
+
+await runTest('SE-17: Trusted offscreen sender is accepted', async () => {
+  assert.strictEqual(
+    isTrustedOffscreen(trustedOffscreenSender(), EXTENSION_ID),
+    true,
+    'Trusted offscreen sender must be accepted',
+  );
+});
+
+await runTest('SE-18: Content-script cannot spoof OFFSCREEN_READY', async () => {
+  // Content-script has sender.tab — will be rejected by _isTrustedOffscreen
+  const contentScriptSender = {
+    id: EXTENSION_ID,
+    url: 'https://example.com/page',
+    tab: { id: ACTIVE_TAB_ID },
+  };
+  assert.strictEqual(
+    isTrustedOffscreen(contentScriptSender, EXTENSION_ID),
+    false,
+    'Content-script must NOT be accepted as offscreen',
+  );
+});
+
+await runTest('SE-19: Content-script cannot spoof INFERENCE_INIT_RESULT', async () => {
+  // Even if content-script crafts { type: 'INFERENCE_INIT_RESULT', success: true },
+  // the sender check rejects it
+  const spoofingSender = {
+    id: EXTENSION_ID,
+    url: 'https://malicious.com/inject',
+    tab: { id: 123 },
+  };
+  assert.strictEqual(
+    isTrustedOffscreen(spoofingSender, EXTENSION_ID),
+    false,
+    'Content-script spoofing inference init must be rejected',
+  );
+});
+
+await runTest('SE-20: Content-script cannot spoof INFERENCE_RESULT', async () => {
+  const spoofingSender = {
+    id: EXTENSION_ID,
+    url: 'https://example.com/page',
+    tab: { id: ACTIVE_TAB_ID },
+  };
+  assert.strictEqual(
+    isTrustedOffscreen(spoofingSender, EXTENSION_ID),
+    false,
+    'Content-script spoofing inference result must be rejected',
+  );
+});
+
+await runTest('SE-21: Content-script cannot spoof INFERENCE_ERROR', async () => {
+  // A malicious content-script sending { type: 'INFERENCE_ERROR', error: 'pwned' }
+  // would be rejected at the sender auth gate
+  const spoofingSender = {
+    id: EXTENSION_ID,
+    url: 'https://attacker.com/inject.js',
+    tab: { id: 42 },
+  };
+  assert.strictEqual(
+    isTrustedOffscreen(spoofingSender, EXTENSION_ID),
+    false,
+    'Content-script spoofing inference error must be rejected',
+  );
+});
+
+await runTest('SE-22: Popup sender cannot spoof offscreen messages', async () => {
+  // Popup has the right extension origin but wrong path
+  const popupSender = trustedPopupSender();
+  assert.strictEqual(
+    isTrustedOffscreen(popupSender, EXTENSION_ID),
+    false,
+    'Popup sender must NOT be accepted as offscreen (wrong path)',
+  );
+});
+
+await runTest('SE-23: Wrong extension ID cannot spoof offscreen', async () => {
+  const wrongExt = {
+    id: 'wrong-extension-id',
+    url: `chrome-extension://wrong-extension-id/offscreen.html`,
+  };
+  assert.strictEqual(
+    isTrustedOffscreen(wrongExt, EXTENSION_ID),
+    false,
+    'Wrong extension ID must be rejected',
+  );
+});
+
+// ── USER_TASK / SESSION_CONTROL Sender Auth ─────────────────
+
+console.log('\n── USER_TASK / SESSION_CONTROL Sender Auth ──');
+
+await runTest('SE-24: Content-script cannot send USER_TASK', async () => {
+  // Content-script sender has sender.tab set → rejected by _isTrustedExtensionUI
+  const contentScriptSender = {
+    id: EXTENSION_ID,
+    url: 'https://example.com/page',
+    tab: { id: ACTIVE_TAB_ID },
+  };
+  assert.strictEqual(
+    isTrustedExtensionUI(contentScriptSender, EXTENSION_ID),
+    false,
+    'Content-script must NOT be able to send USER_TASK',
+  );
+});
+
+await runTest('SE-25: Content-script cannot send SESSION_CONTROL', async () => {
+  const contentScriptSender = {
+    id: EXTENSION_ID,
+    url: 'https://example.com/page',
+    tab: { id: ACTIVE_TAB_ID },
+  };
+  assert.strictEqual(
+    isTrustedExtensionUI(contentScriptSender, EXTENSION_ID),
+    false,
+    'Content-script must NOT be able to send SESSION_CONTROL',
+  );
+});
+
+// ── SMOKE_OFFSCREEN_TEST Sender Auth ────────────────────────
+
+console.log('\n── SMOKE_OFFSCREEN_TEST Sender Auth ──');
+
+await runTest('SE-26: Trusted extension page can send SMOKE_OFFSCREEN_TEST', async () => {
+  assert.strictEqual(
+    isTrustedExtensionPage(trustedPopupSender(), EXTENSION_ID),
+    true,
+    'Popup is a trusted extension page',
+  );
+  assert.strictEqual(
+    isTrustedExtensionPage(trustedOffscreenSender(), EXTENSION_ID),
+    true,
+    'Offscreen is a trusted extension page',
+  );
+});
+
+await runTest('SE-27: Content-script cannot send SMOKE_OFFSCREEN_TEST', async () => {
+  const contentScriptSender = {
+    id: EXTENSION_ID,
+    url: 'https://example.com/page',
+    tab: { id: ACTIVE_TAB_ID },
+  };
+  assert.strictEqual(
+    isTrustedExtensionPage(contentScriptSender, EXTENSION_ID),
+    false,
+    'Content-script must NOT be a trusted extension page',
+  );
+});
+
 // ── Summary ─────────────────────────────────────────────────
 
 console.log('\n' + '═'.repeat(50));
