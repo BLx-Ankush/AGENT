@@ -1289,13 +1289,42 @@ export class Coordinator {
     expectedFingerprint?: TargetFingerprint,
   ): Promise<void> {
     try {
-      // TOKEN REDEMPTION (contract §12):
-      // type_token actions MUST resolve the token from the vault.
-      // The raw value is NEVER passed from planner output directly.
-      // PLANNER OUTPUT → TOKEN REFERENCE → LOCAL VAULT → AUTHORIZED ACTION → REAL VALUE
-      let resolvedValue: string | undefined;
-
+      // ── type_token: TWO-PHASE REDEMPTION ─────────────────────
+      //
+      // P1-C invariant: content-side TOCTOU failure MUST occur
+      // BEFORE the vault token is redeemed.
+      //
+      // Phase 1: Send EXECUTE_ACTION with deferredRedemption=true
+      //          (no raw value). Content does TOCTOU check and
+      //          responds with { toctouPassed: true/false }.
+      //
+      // Phase 2: Only if toctouPassed, redeem token and send
+      //          DELIVER_TOKEN_VALUE with the raw value.
+      //
       if (action.kind === 'type_token' && action.token) {
+        // Phase 1: TOCTOU verification (NO redemption yet)
+        const toctouResponse = await chrome.tabs.sendMessage(tabId, createMessage(
+          MESSAGE_TYPES.EXECUTE_ACTION,
+          {
+            actionId: action.id,
+            kind: 'type_token',
+            targetNodeId: action.targetNodeId,
+            // NO value — deferred redemption
+            deferredRedemption: true,
+            tokenRef: action.token,
+            expectedRole: action.expectedRole,
+            expectedFingerprint,
+          },
+          'background',
+        )) as { toctouPassed?: boolean; error?: string };
+
+        if (!toctouResponse || !toctouResponse.toctouPassed) {
+          console.error('[Coordinator] P1-C: type_token TOCTOU failed — vault NOT redeemed:',
+            toctouResponse?.error || 'unknown');
+          return; // Token NOT redeemed — safe
+        }
+
+        // Phase 2: TOCTOU passed → redeem token now
         const redemption = this.redeemTokenForAction(
           action.token,
           action.targetNodeId || '',
@@ -1303,13 +1332,28 @@ export class Coordinator {
           origin,
         );
         if ('error' in redemption) {
-          console.error('[Coordinator] Token redemption failed:', redemption.error, 'token:', action.token);
-          return; // refuse to execute with unredeemed token
+          console.error('[Coordinator] Token redemption failed:', redemption.error);
+          return;
         }
-        resolvedValue = redemption.value;
-        console.log('[Coordinator] Token redeemed for type_token action');
-      } else if (action.kind === 'type_text') {
-        // type_text uses safe text value (not a vault token)
+        console.log('[Coordinator] Token redeemed AFTER content-side TOCTOU passed');
+
+        // Deliver the redeemed value to content for DOM mutation
+        await chrome.tabs.sendMessage(tabId, createMessage(
+          MESSAGE_TYPES.DELIVER_TOKEN_VALUE,
+          {
+            actionId: action.id,
+            targetNodeId: action.targetNodeId,
+            value: redemption.value,
+            expectedFingerprint,
+          },
+          'background',
+        ));
+        return;
+      }
+
+      // ── All other actions: single-phase execution ────────────
+      let resolvedValue: string | undefined;
+      if (action.kind === 'type_text') {
         resolvedValue = action.text;
       }
 
@@ -1319,12 +1363,8 @@ export class Coordinator {
           actionId: action.id,
           kind: action.kind,
           targetNodeId: action.targetNodeId,
-          // resolvedValue is the post-redemption value for type_token,
-          // or safe text for type_text. NEVER the raw planner token.
           value: resolvedValue,
           expectedRole: action.expectedRole,
-          // P1-C TOCTOU: pass the verified fingerprint so content-side
-          // can revalidate immediately before the DOM mutation.
           expectedFingerprint,
         },
         'background',
