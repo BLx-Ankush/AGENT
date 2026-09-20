@@ -290,3 +290,182 @@ function containsCodePatterns(text: string): boolean {
   ];
   return patterns.some(p => p.test(text));
 }
+
+// ── P1-I: Centralized Planner Response Validation Gate ───────
+
+/**
+ * Target-bound action kinds that REQUIRE targetNodeId.
+ */
+const TARGET_REQUIRING_KINDS = new Set([
+  'click', 'focus', 'type_text', 'type_token', 'select',
+]);
+
+/**
+ * Non-target action kinds that MUST NOT carry target execution fields.
+ */
+const NON_TARGET_KINDS = new Set([
+  'wait', 'request_observation', 'finish',
+]);
+
+/**
+ * P1-I: Planner response semantic validation result.
+ */
+export interface PlannerResponseValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * P1-I context needed for response-level validation.
+ */
+export interface ResponseValidationContext {
+  /** The observation ID from the current capture */
+  currentObservationId: string;
+  /** Target fingerprints from the current DOM harvest */
+  targetFingerprints: Map<string, TargetFingerprint>;
+  /** Max allowed actions per plan */
+  maxActions?: number;
+}
+
+/**
+ * P1-I: Centralized planner response semantic validation gate.
+ *
+ * Validates the COMPLETE planner response BEFORE confirmation or execution.
+ *
+ * This gate enforces:
+ *   1. Protocol version
+ *   2. Observation binding (response.observationId === current)
+ *   3. Plan ID present
+ *   4. Plan expiry (expiresAt must be valid and not expired)
+ *   5. Action count within bounds
+ *   6. Action ID uniqueness
+ *   7. Target-bound action shape (targetNodeId required)
+ *   8. Semantic field validation per action kind
+ *   9. Authoritative target enforcement (reuses P1-H)
+ *
+ * Planner output is UNTRUSTED proposal data.
+ * Schema validity does not imply execution validity.
+ */
+export function validatePlannerResponse(
+  response: {
+    protocolVersion: string;
+    observationId: string;
+    planId: string;
+    expiresAt: string;
+    actions: AgentAction[];
+  },
+  ctx: ResponseValidationContext,
+): PlannerResponseValidation {
+  const errors: string[] = [];
+  const maxActions = ctx.maxActions ?? 10;
+
+  // 1. Protocol version
+  if (response.protocolVersion !== '2.0') {
+    errors.push(`P1-I: wrong protocolVersion: ${response.protocolVersion}`);
+  }
+
+  // 2. Observation binding — response must match current observation
+  if (response.observationId !== ctx.currentObservationId) {
+    errors.push(
+      `P1-I: observation mismatch — plan from ${response.observationId}, current ${ctx.currentObservationId}`,
+    );
+  }
+
+  // 3. Plan ID
+  if (!response.planId || response.planId.trim().length === 0) {
+    errors.push('P1-I: empty planId');
+  }
+
+  // 4. Plan expiry — must be valid ISO timestamp and not expired
+  const expiryMs = Date.parse(response.expiresAt);
+  if (isNaN(expiryMs)) {
+    errors.push(`P1-I: malformed expiresAt: ${response.expiresAt}`);
+  } else if (expiryMs <= Date.now()) {
+    errors.push('P1-I: plan expired');
+  }
+
+  // 5. Action count
+  if (!response.actions || response.actions.length === 0) {
+    errors.push('P1-I: no actions in plan');
+  } else if (response.actions.length > maxActions) {
+    errors.push(`P1-I: too many actions: ${response.actions.length} > ${maxActions}`);
+  }
+
+  // 6. Action ID uniqueness
+  if (response.actions && response.actions.length > 0) {
+    const actionIds = new Set<string>();
+    for (const action of response.actions) {
+      if (!action.id || action.id.trim().length === 0) {
+        errors.push('P1-I: empty action ID');
+      } else if (actionIds.has(action.id)) {
+        errors.push(`P1-I: duplicate action ID: ${action.id}`);
+      } else {
+        actionIds.add(action.id);
+      }
+    }
+  }
+
+  // 7-9. Per-action semantic validation
+  if (response.actions) {
+    for (const action of response.actions) {
+      // 7. Action kind must be allowed
+      if (!isAllowedActionKind(action.kind)) {
+        errors.push(`P1-I: disallowed action kind: ${action.kind}`);
+        continue;
+      }
+
+      // 8. Target-bound actions MUST have targetNodeId
+      if (TARGET_REQUIRING_KINDS.has(action.kind)) {
+        const targetId = 'targetNodeId' in action ? (action as any).targetNodeId : undefined;
+        if (!targetId || (typeof targetId === 'string' && targetId.trim().length === 0)) {
+          errors.push(`P1-I: ${action.kind} missing required targetNodeId`);
+        } else {
+          // P1-H: target must be authoritative DOM node
+          if (!isAuthoritativeDomTarget(targetId, ctx.targetFingerprints)) {
+            errors.push(`P1-I/P1-H: target ${targetId} is not an execution-authoritative DOM node`);
+          }
+        }
+      }
+
+      // 9. Semantic field validation per action kind
+      switch (action.kind) {
+        case 'type_token': {
+          const a = action as any;
+          if (!a.token || (typeof a.token === 'string' && a.token.trim().length === 0)) {
+            errors.push('P1-I: type_token missing required token');
+          }
+          break;
+        }
+        case 'select': {
+          const a = action as any;
+          if (!a.optionId && a.optionId !== '' && !a.value) {
+            // optionId is required per typed contract
+            errors.push('P1-I: select missing required optionId');
+          }
+          break;
+        }
+        case 'wait': {
+          const a = action as any;
+          if (typeof a.milliseconds !== 'number' || a.milliseconds <= 0 || a.milliseconds > 30_000) {
+            errors.push('P1-I: wait milliseconds out of bounds');
+          }
+          break;
+        }
+        case 'request_observation':
+        case 'finish': {
+          // Non-target actions must not smuggle target execution fields
+          const a = action as any;
+          if (a.targetNodeId) {
+            errors.push(`P1-I: ${action.kind} must not contain targetNodeId`);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}

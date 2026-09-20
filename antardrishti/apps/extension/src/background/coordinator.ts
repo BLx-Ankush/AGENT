@@ -46,7 +46,7 @@ import {
   type PlannerRequestInput,
   type PlannerResponse,
 } from '@antardrishti/planner';
-import { validatePlan, checkActionFreshness, isAuthoritativeDomTarget, type SceneContext } from '@antardrishti/planner';
+import { validatePlan, checkActionFreshness, isAuthoritativeDomTarget, validatePlannerResponse, type SceneContext } from '@antardrishti/planner';
 import { createTargetFingerprint, verifyTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
 import {
   PerceptionPipeline,
@@ -1175,7 +1175,7 @@ export class Coordinator {
         return;
       }
 
-      // ── Validate plan ────────────────────────────────────
+      // ── Validate plan ─────────────────────────────────────
       const nodeIds = new Set(
         sanitized.scene.nodes.map((n) => n.id),
       );
@@ -1197,6 +1197,23 @@ export class Coordinator {
             (node.observationId || captureResult.observationId) as string,
           ));
         }
+      }
+
+      // ── P1-I: Planner response trust boundary ──────────────
+      // Planner output is untrusted proposal data. Schema validity does not
+      // imply execution validity. This gate validates the COMPLETE response
+      // BEFORE confirmation, vault redemption, or execution.
+      const responseValidation = validatePlannerResponse(plannerResponse, {
+        currentObservationId: captureResult.observationId as string,
+        targetFingerprints,
+      });
+
+      if (!responseValidation.valid) {
+        const responseErrors = responseValidation.errors.join('; ');
+        console.error('[Coordinator] P1-I: Planner response rejected:', responseErrors);
+        sendResponse({ ack: false, error: `P1-I: planner response invalid: ${responseErrors}` });
+        this.setPhase('idle');
+        return;
       }
 
       const currentFreshness = {
