@@ -418,10 +418,18 @@ export class Coordinator {
 
   async initialize(): Promise<void> {
     try {
-      const stored = await chrome.storage.session.get('coordinatorState');
+      const stored = await chrome.storage.session.get(['coordinatorState', 'invalidatedObservationIds']);
       if (stored.coordinatorState) {
         this.state = { ...INITIAL_STATE, ...stored.coordinatorState };
         console.log('[Coordinator] Restored session:', this.state.sessionId);
+      }
+      // P1-G: Restore invalidated observation IDs across SW restart.
+      // All observations that authorized a state-changing action must
+      // remain invalidated for the entire logical session lifetime.
+      if (Array.isArray(stored.invalidatedObservationIds)) {
+        this._invalidatedObservationIds = new Set(stored.invalidatedObservationIds);
+        console.log('[Coordinator] P1-G: Restored', this._invalidatedObservationIds.size,
+          'invalidated observation IDs');
       }
     } catch {
       console.log('[Coordinator] Fresh start');
@@ -459,7 +467,12 @@ export class Coordinator {
 
   private async persistState(): Promise<void> {
     try {
-      await chrome.storage.session.set({ coordinatorState: this.state });
+      await chrome.storage.session.set({
+        coordinatorState: this.state,
+        // P1-G: Persist invalidated observation IDs alongside session state.
+        // Stored as array for JSON serialization; restored as Set.
+        invalidatedObservationIds: [...this._invalidatedObservationIds],
+      });
     } catch (e) {
       console.warn('[Coordinator] Persist failed:', e);
     }
@@ -1359,6 +1372,16 @@ export class Coordinator {
           this._invalidatedObservationIds.add(captureResult.observationId as string);
           // Invalidate cache so next invocation re-observes
           this.capture.invalidateCache();
+          // P1-G: Persist invalidation state so it survives SW restart.
+          // Fail closed: if persistence fails, abort the pipeline.
+          try {
+            await this.persistState();
+          } catch (persistErr) {
+            console.error('[Coordinator] P1-G: FAIL CLOSED — could not persist invalidated observation:', persistErr);
+            sendResponse({ ack: false, error: 'P1-G: failed to persist observation invalidation state' });
+            this.setPhase('idle');
+            return;
+          }
           console.log('[Coordinator] P1-G: Observation', captureResult.observationId,
             'invalidated after state-changing action — re-observation required');
         }
