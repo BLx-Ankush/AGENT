@@ -818,14 +818,34 @@ export class Coordinator {
 
     if (!this.state.isActive) {
       await this.startSession(payload.tabId);
+    } else {
+      // P1-F: Session-bound tab enforcement.
+      // An action observed, planned, authorized, confirmed, or capability-bound
+      // for Tab A MUST NEVER execute against Tab B.
+      // If the session is already bound to a tab, reject any USER_TASK with a
+      // different tabId. This prevents cross-tab confused-deputy attacks.
+      if (payload.tabId !== this.state.activeTabId) {
+        console.error(
+          '[Coordinator] P1-F: CROSS-TAB REJECTED — session bound to tab',
+          this.state.activeTabId, 'but payload claims tab', payload.tabId,
+        );
+        sendResponse({
+          ack: false,
+          error: `P1-F: session bound to tab ${this.state.activeTabId}, rejecting tab ${payload.tabId}`,
+        });
+        return;
+      }
     }
 
+    // P1-F: All downstream operations MUST use the session-bound tab ID,
+    // never the payload's claimed tabId. This is the authoritative binding.
+    const sessionTabId = this.state.activeTabId!;
 
     try {
       // ── Step 1: Capture visible tab ─────────────────────
       this.setPhase('capturing');
       const captureResult = await this.capture.captureVisibleTab(
-        payload.tabId,
+        sessionTabId,
       );
       console.log('[Coordinator] [1/8] Captured:', {
         obs: captureResult.observationId,
@@ -836,7 +856,7 @@ export class Coordinator {
 
       // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
-        payload.tabId,
+        sessionTabId,
         captureResult.observationId,
       );
       console.log('[Coordinator] [2/8] Harvested:', {
@@ -957,7 +977,7 @@ export class Coordinator {
         payload.rawTask,
         unifiedNodes,
         this.state.sessionId!,
-        payload.tabId,
+        sessionTabId,
         0, // frameId
         captureResult.stamp.documentGeneration,
         captureResult.stamp.topOrigin,
@@ -1076,7 +1096,7 @@ export class Coordinator {
 
       const currentFreshness = {
         sessionId: this.state.sessionId!,
-        tabId: payload.tabId,
+        tabId: sessionTabId,
         frameId: 0,
         documentGeneration: captureResult.stamp.documentGeneration,
         viewportFingerprint: `${captureResult.width}x${captureResult.height}`,
@@ -1149,7 +1169,7 @@ export class Coordinator {
         if (targetNodeId) {
           try {
             const verifyResult = await chrome.tabs.sendMessage(
-              payload.tabId,
+              sessionTabId,
               createMessage(
                 MESSAGE_TYPES.VERIFY_TARGET,
                 { nodeId: targetNodeId },
@@ -1210,7 +1230,7 @@ export class Coordinator {
 
         console.log('[Coordinator] Executing:', action.kind, action.id);
         await this.executeAction(
-          payload.tabId,
+          sessionTabId,
           action,
           captureResult.stamp.documentGeneration,
           captureResult.stamp.topOrigin,
@@ -1551,7 +1571,18 @@ export class Coordinator {
           active: true,
           currentWindow: true,
         });
-        if (tab?.id) await this.startSession(tab.id);
+        if (tab?.id) {
+          // P1-F: If a session is already active, end it first.
+          // This revokes all vault grants, rejects pending confirmations,
+          // and clears the stale tab binding before creating a new session.
+          // Without this, a SESSION_CONTROL 'start' could silently rebind
+          // an active session to a different tab.
+          if (this.state.isActive) {
+            console.log('[Coordinator] P1-F: Ending existing session before rebinding to tab', tab.id);
+            await this.endSession();
+          }
+          await this.startSession(tab.id);
+        }
         break;
       }
       case 'pause':
