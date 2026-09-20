@@ -46,7 +46,7 @@ import {
   type PlannerRequestInput,
   type PlannerResponse,
 } from '@antardrishti/planner';
-import { validatePlan, checkActionFreshness, type SceneContext } from '@antardrishti/planner';
+import { validatePlan, checkActionFreshness, isAuthoritativeDomTarget, type SceneContext } from '@antardrishti/planner';
 import { createTargetFingerprint, verifyTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
 import {
   PerceptionPipeline,
@@ -1353,6 +1353,22 @@ export class Coordinator {
         if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
           console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed before execution of', action.kind);
           sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated before execution' });
+          this.setPhase('idle');
+          return;
+        }
+
+        // P1-H: Coordinator-side execution authority boundary (defense-in-depth).
+        // Even if the validator passed, verify the target is an authoritative
+        // DOM node before dispatching to content script. Visual-only,
+        // unresolved, and non-DOM targets are rejected here.
+        const actionTargetId = 'targetNodeId' in action ? action.targetNodeId : undefined;
+        if (actionTargetId && !isAuthoritativeDomTarget(actionTargetId, targetFingerprints)) {
+          console.error('[Coordinator] P1-H: REJECTED — target', actionTargetId,
+            'is not an execution-authoritative DOM node');
+          sendResponse({
+            ack: false,
+            error: `P1-H: target ${actionTargetId} is not an execution-authoritative DOM node`,
+          });
           this.setPhase('idle');
           return;
         }
