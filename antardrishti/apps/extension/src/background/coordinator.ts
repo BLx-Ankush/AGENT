@@ -475,6 +475,10 @@ export class Coordinator {
       });
     } catch (e) {
       console.warn('[Coordinator] Persist failed:', e);
+      // P1-G: Rethrow so security-critical callers (observation
+      // invalidation) can fail closed. Non-critical callers wrap
+      // this in their own try/catch.
+      throw e;
     }
   }
 
@@ -1397,7 +1401,7 @@ export class Coordinator {
       console.log(`[Coordinator] ═══ Pipeline Done (${pipelineMs}ms) ═══`);
 
       this.setPhase('idle');
-      await this.persistState();
+      try { await this.persistState(); } catch { /* best-effort for pipeline completion */ }
 
       sendResponse({
         ack: true,
@@ -1418,7 +1422,7 @@ export class Coordinator {
     } catch (e) {
       console.error('[Coordinator] Pipeline error:', e);
       this.setPhase('idle');
-      await this.persistState();
+      try { await this.persistState(); } catch { /* best-effort in error path */ }
       sendResponse({ error: `Pipeline failed: ${e}` });
     }
   }
@@ -1738,7 +1742,7 @@ export class Coordinator {
         break;
     }
 
-    await this.persistState();
+    try { await this.persistState(); } catch { /* best-effort for session control */ }
     this.broadcastStatus();
     sendResponse({ ack: true, sessionId: this.state.sessionId });
   }
@@ -1778,7 +1782,7 @@ export class Coordinator {
     };
 
     console.log('[Coordinator] Session started:', sessionId);
-    await this.persistState();
+    try { await this.persistState(); } catch { /* best-effort for session start */ }
   }
 
   private async endSession(): Promise<void> {
@@ -1804,7 +1808,7 @@ export class Coordinator {
     // New sessions start with no invalidated observation.
     this._invalidatedObservationIds.clear();
     this.state = { ...INITIAL_STATE };
-    await this.persistState();
+    try { await this.persistState(); } catch { /* best-effort for session end */ }
   }
 
   // ── Tab events ───────────────────────────────────────────

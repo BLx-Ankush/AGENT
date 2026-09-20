@@ -125,12 +125,17 @@ class CoordinatorSim {
     }
   }
 
-  // Mirrors production persistState()
+  // Mirrors production persistState() — try/catch + rethrow
   async persistState(): Promise<void> {
-    await this.storage.set({
-      coordinatorState: this.state,
-      invalidatedObservationIds: [...this._invalidatedObservationIds],
-    });
+    try {
+      await this.storage.set({
+        coordinatorState: this.state,
+        invalidatedObservationIds: [...this._invalidatedObservationIds],
+      });
+    } catch (e) {
+      // P1-G: rethrow so security-critical callers fail closed
+      throw e;
+    }
   }
 
   // Mirrors production: after state-changing action
@@ -139,11 +144,11 @@ class CoordinatorSim {
     await this.persistState(); // fail-closed if this throws
   }
 
-  // Mirrors production endSession()
+  // Mirrors production endSession() — best-effort persist
   async endSession(): Promise<void> {
     this._invalidatedObservationIds.clear();
     this.state = { ...INITIAL_STATE };
-    await this.persistState();
+    try { await this.persistState(); } catch { /* best-effort */ }
   }
 
   isObservationStale(obsId: string): boolean {
@@ -439,6 +444,106 @@ await runTest('RG-SW-EX2: empty Set serializes correctly', async () => {
   const c2 = new CoordinatorSim(storage);
   await c2.initialize();
   assert.strictEqual(c2._invalidatedObservationIds.size, 0);
+});
+
+// ── RG-SW-FC: Fail-closed persistence tests ────────────────
+
+console.log('── RG-SW-FC: Fail-closed persistence error tests ──');
+
+await runTest('RG-SW-FC-01: storage.set throws → invalidateObservation throws → pipeline aborts', async () => {
+  const storage = new MockSessionStorage();
+  const c = new CoordinatorSim(storage);
+  c.startSession(SESSION_A, 42);
+  try { await c.persistState(); } catch { /* best-effort for start */ }
+
+  // Simulate storage failure
+  storage.setFailOnSet(true);
+
+  // invalidateObservation calls persistState which now rethrows
+  let threw = false;
+  try {
+    await c.invalidateObservation(OBS_N);
+  } catch {
+    threw = true;
+  }
+  assert.strictEqual(threw, true,
+    'invalidateObservation MUST throw when persistState fails — pipeline aborts');
+});
+
+await runTest('RG-SW-FC-02: in-memory invalidation remains after write failure', async () => {
+  const storage = new MockSessionStorage();
+  const c = new CoordinatorSim(storage);
+  c.startSession(SESSION_A, 42);
+  try { await c.persistState(); } catch { /* best-effort */ }
+
+  storage.setFailOnSet(true);
+
+  // .add() happens before persistState throws
+  try { await c.invalidateObservation(OBS_N); } catch { /* expected */ }
+
+  // In-memory Set still has it
+  assert.strictEqual(c.isObservationStale(OBS_N), true,
+    'In-memory invalidation must remain even after persist failure');
+});
+
+await runTest('RG-SW-FC-03: successful persistence survives restart', async () => {
+  const storage = new MockSessionStorage();
+  const c1 = new CoordinatorSim(storage);
+  c1.startSession(SESSION_A, 42);
+  try { await c1.persistState(); } catch { /* best-effort */ }
+  await c1.invalidateObservation(OBS_N); // succeeds (storage not failed)
+
+  // Restart
+  const c2 = new CoordinatorSim(storage);
+  await c2.initialize();
+  assert.strictEqual(c2.isObservationStale(OBS_N), true);
+});
+
+await runTest('RG-SW-FC-04: persistence success path unchanged', async () => {
+  const storage = new MockSessionStorage();
+  const c = new CoordinatorSim(storage);
+  c.startSession(SESSION_A, 42);
+  try { await c.persistState(); } catch { /* best-effort */ }
+
+  // No failure → no throw
+  let threw = false;
+  try {
+    await c.invalidateObservation(OBS_N);
+  } catch {
+    threw = true;
+  }
+  assert.strictEqual(threw, false, 'Successful persistence must not throw');
+  assert.strictEqual(c.isObservationStale(OBS_N), true);
+
+  // Verify persisted
+  const stored = await storage.get(['invalidatedObservationIds']);
+  assert.ok(Array.isArray(stored.invalidatedObservationIds));
+  assert.ok((stored.invalidatedObservationIds as string[]).includes(OBS_N));
+});
+
+await runTest('RG-SW-FC-05: persist failure → zero continued authorization', async () => {
+  const storage = new MockSessionStorage();
+  const c = new CoordinatorSim(storage);
+  c.startSession(SESSION_A, 42);
+  try { await c.persistState(); } catch { /* best-effort */ }
+
+  storage.setFailOnSet(true);
+
+  // In production: after persistState throws, the pipeline aborts.
+  // The action has been invalidated in-memory but not persisted.
+  // The pipeline returns a failure response — no successful completion.
+  let pipelineAborted = false;
+  try {
+    await c.invalidateObservation(OBS_N);
+    // If we reach here, persistence succeeded (shouldn't happen)
+  } catch {
+    pipelineAborted = true;
+  }
+
+  assert.strictEqual(pipelineAborted, true,
+    'Pipeline must abort — zero continued authorization after persist failure');
+  // The observation is still invalidated in memory (defense-in-depth)
+  assert.strictEqual(c.isObservationStale(OBS_N), true);
 });
 
 // ── Summary ─────────────────────────────────────────────────
