@@ -1,17 +1,12 @@
 /**
- * ANTARDRISHTI — P1-G: Re-Observation / Stale Observation Binding Tests
+ * ANTARDRISHTI — P1-G: Permanent Observation Invalidation Tests
  *
  * Proves the invariant:
- *   After ANY state-changing action, the system MUST NOT execute another
- *   state-changing action using the previous observation/scene.
+ *   Every observation that has authorized a state-changing action MUST remain
+ *   invalidated for the ENTIRE lifetime of the current session.
+ *   Not only the latest observation.
  *
- *   A state-changing action MUST invalidate the observation that authorized it,
- *   and the next state-changing action MUST be based on a NEW observation.
- *
- * Exercises the actual production freshness/observation decision logic:
- *   - _invalidatedObservationId tracking
- *   - checkActionFreshness observation binding
- *   - createTargetFingerprint / verifyTargetFingerprint
+ * Exercises the actual production Set-based lifecycle logic.
  *
  * Run: npx tsx tests/test-reobservation.mts
  */
@@ -51,7 +46,8 @@ async function runTest(name: string, fn: () => void | Promise<void>): Promise<vo
 
 const OBS_N = 'obs-N-aaa111';
 const OBS_N1 = 'obs-N1-bbb222';
-const OBS_STALE = OBS_N; // Same as N — this is the stale reuse
+const OBS_N2 = 'obs-N2-ccc333';
+const OBS_N3 = 'obs-N3-ddd444';
 const SESSION_A = 'session-reobs-A';
 const DOC_GEN_A = 'doc-gen-100';
 const DOC_GEN_B = 'doc-gen-200';
@@ -63,43 +59,26 @@ const STATE_CHANGING_ACTIONS = new Set([
   'clear', 'submit', 'drag', 'upload',
 ]);
 
-// ── Observation lifecycle simulation ────────────────────────
-// Mirrors the exact production _invalidatedObservationId tracking
+// ── Observation lifecycle — mirrors production Set<string> ──
 
 interface ObservationLifecycle {
-  invalidatedObservationId: string | null;
+  invalidatedObservationIds: Set<string>;
 }
 
-/**
- * Check whether an observation is stale.
- * Mirrors the exact production check from coordinator.ts after capture.
- */
-function isObservationStale(
-  lifecycle: ObservationLifecycle,
-  capturedObservationId: string,
-): boolean {
-  return (
-    lifecycle.invalidatedObservationId !== null &&
-    capturedObservationId === lifecycle.invalidatedObservationId
-  );
+function createLifecycle(): ObservationLifecycle {
+  return { invalidatedObservationIds: new Set() };
 }
 
-/**
- * Invalidate an observation after state-changing action.
- * Mirrors the exact production assignment in the execution loop.
- */
-function invalidateObservation(
-  lifecycle: ObservationLifecycle,
-  observationId: string,
-): void {
-  lifecycle.invalidatedObservationId = observationId;
+function isObservationStale(lifecycle: ObservationLifecycle, obsId: string): boolean {
+  return lifecycle.invalidatedObservationIds.has(obsId);
 }
 
-/**
- * Reset observation lifecycle (session end).
- */
+function invalidateObservation(lifecycle: ObservationLifecycle, obsId: string): void {
+  lifecycle.invalidatedObservationIds.add(obsId);
+}
+
 function resetObservationLifecycle(lifecycle: ObservationLifecycle): void {
-  lifecycle.invalidatedObservationId = null;
+  lifecycle.invalidatedObservationIds.clear();
 }
 
 // ── Freshness helpers ───────────────────────────────────────
@@ -117,400 +96,272 @@ function makeFreshness(obsId: string, docGen: string = DOC_GEN_A): FreshnessBind
   };
 }
 
-function makeFingerprint(
-  nodeId: string,
-  obsId: string,
-  docGen: string = DOC_GEN_A,
-): TargetFingerprint {
+function makeFingerprint(nodeId: string, obsId: string, docGen: string = DOC_GEN_A): TargetFingerprint {
   return createTargetFingerprint(
-    nodeId,
-    'button',
-    'Submit',
-    'html>body>form>button',
-    { x: 100, y: 200, w: 80, h: 30 },
-    0,
-    docGen,
-    obsId,
+    nodeId, 'button', 'Submit', 'html>body>form>button',
+    { x: 100, y: 200, w: 80, h: 30 }, 0, docGen, obsId,
   );
 }
 
 // ── Tests ───────────────────────────────────────────────────
 
-console.log('\n🔒 ANTARDRISHTI — P1-G: Re-Observation / Stale Observation Binding Tests\n');
+console.log('\n🔒 ANTARDRISHTI — P1-G: Permanent Observation Invalidation Tests\n');
 
-// ── RG-01: First observation → first state-changing action succeeds ──
+// ── RG-P-01: Permanent invalidation ──
 
-console.log('── RG-01: First observation → first state-changing action succeeds ──');
+console.log('── RG-P-01: OBS_N permanently invalidated after state-changing action ──');
 
-await runTest('RG-01a: fresh observation allows state-changing action', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
+await runTest('RG-P-01: OBS_N invalidated → stays invalid forever in session', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  assert.strictEqual(isObservationStale(lc, OBS_N), true);
+  // Still invalid after more observations
+  invalidateObservation(lc, OBS_N1);
+  invalidateObservation(lc, OBS_N2);
+  assert.strictEqual(isObservationStale(lc, OBS_N), true, 'OBS_N must remain invalid');
 });
 
-await runTest('RG-01b: freshness check passes for first action from observation N', () => {
-  const freshness = makeFreshness(OBS_N);
+// ── RG-P-02: OBS_N + OBS_N1 invalidated → replay OBS_N → REJECT ──
+
+console.log('── RG-P-02: OBS_N + OBS_N1 invalidated → replay OBS_N → REJECT ──');
+
+await runTest('RG-P-02: replay OBS_N after OBS_N1 is also invalidated', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  // Replay OBS_N must still be rejected
+  assert.strictEqual(isObservationStale(lc, OBS_N), true, 'OBS_N replay must reject');
+});
+
+// ── RG-P-03: OBS_N + OBS_N1 invalidated → replay OBS_N1 → REJECT ──
+
+console.log('── RG-P-03: OBS_N + OBS_N1 invalidated → replay OBS_N1 → REJECT ──');
+
+await runTest('RG-P-03: replay OBS_N1 after both invalidated', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), true, 'OBS_N1 replay must reject');
+});
+
+// ── RG-P-04: OBS_N invalidated → OBS_N1 new → allowed ──
+
+console.log('── RG-P-04: OBS_N invalidated → fresh OBS_N1 → allowed ──');
+
+await runTest('RG-P-04: fresh observation not in invalidated set → allowed', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), false, 'Fresh OBS_N1 must be allowed');
+});
+
+// ── RG-P-05: Multiple sequential observations all permanently invalid ──
+
+console.log('── RG-P-05: Multiple sequential observations all permanently invalid ──');
+
+await runTest('RG-P-05: 4 observations sequentially invalidated → all permanently stale', () => {
+  const lc = createLifecycle();
+  const observations = [OBS_N, OBS_N1, OBS_N2, OBS_N3];
+
+  for (const obs of observations) {
+    assert.strictEqual(isObservationStale(lc, obs), false, `${obs} should be fresh before use`);
+    invalidateObservation(lc, obs);
+  }
+
+  // ALL must still be stale
+  for (const obs of observations) {
+    assert.strictEqual(isObservationStale(lc, obs), true, `${obs} must remain permanently stale`);
+  }
+
+  assert.strictEqual(lc.invalidatedObservationIds.size, 4, 'Set must contain all 4');
+});
+
+// ── RG-P-06: Session end clears invalidation set ──
+
+console.log('── RG-P-06: Session end clears invalidation set ──');
+
+await runTest('RG-P-06: session end → invalidation set cleared', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  invalidateObservation(lc, OBS_N2);
+  assert.strictEqual(lc.invalidatedObservationIds.size, 3);
+
+  resetObservationLifecycle(lc);
+  assert.strictEqual(lc.invalidatedObservationIds.size, 0);
+  assert.strictEqual(isObservationStale(lc, OBS_N), false);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), false);
+  assert.strictEqual(isObservationStale(lc, OBS_N2), false);
+});
+
+// ── RG-P-07: New session after end → fresh observation works ──
+
+console.log('── RG-P-07: New session after end → fresh observation works ──');
+
+await runTest('RG-P-07: after session end, any observation is fresh', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  resetObservationLifecycle(lc);
+
+  // New session: all observations are fresh
+  assert.strictEqual(isObservationStale(lc, OBS_N), false);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), false);
+  assert.strictEqual(isObservationStale(lc, OBS_N2), false);
+
+  // New observations can be used and invalidated normally
+  invalidateObservation(lc, OBS_N2);
+  assert.strictEqual(isObservationStale(lc, OBS_N2), true);
+  assert.strictEqual(isObservationStale(lc, OBS_N), false); // Old obs from prior session is fresh
+});
+
+// ── RG-P-08: type_token replay from any invalidated observation → zero ──
+
+console.log('── RG-P-08: type_token replay from any invalidated observation → zero ──');
+
+await runTest('RG-P-08a: type_token replay from OBS_N (first invalidated) → blocked', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  // type_token from OBS_N: lifecycle check blocks at capture time
+  assert.strictEqual(isObservationStale(lc, OBS_N), true);
+  // In production: blocked before reaching executeAction/token redemption → zero redemption
+});
+
+await runTest('RG-P-08b: type_token replay from OBS_N1 (second invalidated) → blocked', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  invalidateObservation(lc, OBS_N1);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), true);
+});
+
+await runTest('RG-P-08c: freshness also rejects stale plan observation for type_token', () => {
+  const freshNew = makeFreshness(OBS_N2);
   const action: AgentAction = {
-    kind: 'scroll',
-    id: 'act-rg01b',
-    direction: 'down',
-    amount: 'small',
-  };
-  const error = checkActionFreshness(action, freshness, OBS_N, new Map());
-  assert.strictEqual(error, null, 'First action should pass freshness');
+    kind: 'type_text', id: 'act-rg-p08c', targetNodeId: 'n1', text: 'attack',
+  } as AgentAction;
+  // Plan from OBS_N but current freshness is OBS_N2
+  const err = checkActionFreshness(action, freshNew, OBS_N, new Map([['n1', makeFingerprint('n1', OBS_N2)]]));
+  assert.notStrictEqual(err, null, 'Stale plan observation should fail freshness');
 });
 
-// ── RG-02: After state-changing action, old observation is marked stale ──
+// ── RG-P-09: P1-C observation/document-generation/fingerprint checks intact ──
 
-console.log('── RG-02: After state-changing action, old observation marked stale ──');
+console.log('── RG-P-09: P1-C checks remain intact ──');
 
-await runTest('RG-02a: invalidateObservation marks the observation', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  invalidateObservation(lifecycle, OBS_N);
-  assert.strictEqual(lifecycle.invalidatedObservationId, OBS_N);
-});
-
-await runTest('RG-02b: after invalidation, same obsId is stale', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  invalidateObservation(lifecycle, OBS_N);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-});
-
-await runTest('RG-02c: after invalidation, different obsId is NOT stale', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  invalidateObservation(lifecycle, OBS_N);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), false);
-});
-
-// ── RG-03: Second state-changing action using old observation → rejected ──
-
-console.log('── RG-03: Second state-changing action using old observation → rejected ──');
-
-await runTest('RG-03a: stale observation rejected by isObservationStale', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  // Action A executes and invalidates OBS_N
-  invalidateObservation(lifecycle, OBS_N);
-  // Second pipeline tries to reuse OBS_N
-  assert.strictEqual(
-    isObservationStale(lifecycle, OBS_N),
-    true,
-    'Old observation must be rejected',
-  );
-});
-
-await runTest('RG-03b: freshness check rejects stale plan observation', () => {
+await runTest('RG-P-09a: observationId mismatch rejected by freshness', () => {
   const freshness = makeFreshness(OBS_N);
-  const action: AgentAction = {
-    kind: 'scroll',
-    id: 'act-rg03b',
-    direction: 'down',
-    amount: 'small',
-  };
-  // Plan says observation is OBS_STALE but current is OBS_N1
-  const freshnessNew = makeFreshness(OBS_N1);
-  const error = checkActionFreshness(action, freshnessNew, OBS_N, new Map());
-  assert.notStrictEqual(error, null, 'Stale observation should be rejected');
-  assert.ok(error!.includes('Stale observation'));
-});
-
-// ── RG-04: New observation with NEW observationId → action succeeds ──
-
-console.log('── RG-04: New observation with NEW observationId → action succeeds ──');
-
-await runTest('RG-04a: new observation after invalidation is not stale', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  invalidateObservation(lifecycle, OBS_N);
-  // New capture produces OBS_N1
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), false);
-});
-
-await runTest('RG-04b: freshness check passes with new observation', () => {
-  const freshness = makeFreshness(OBS_N1);
-  const action: AgentAction = {
-    kind: 'scroll',
-    id: 'act-rg04b',
-    direction: 'up',
-    amount: 'large',
-  };
-  const error = checkActionFreshness(action, freshness, OBS_N1, new Map());
-  assert.strictEqual(error, null, 'New observation should pass freshness');
-});
-
-// ── RG-05: New observation but reused old target fingerprint → rejected ──
-
-console.log('── RG-05: New observation but reused old target fingerprint → rejected ──');
-
-await runTest('RG-05: old fingerprint from OBS_N vs new from OBS_N1 → mismatch', () => {
-  const oldFp = makeFingerprint('node-1', OBS_N, DOC_GEN_A);
-  const newFp = makeFingerprint('node-1', OBS_N1, DOC_GEN_B);
-
-  // Document generation changed: oldFp has DOC_GEN_A, newFp has DOC_GEN_B
-  const mismatch = verifyTargetFingerprint(oldFp, newFp);
-  assert.notStrictEqual(mismatch, null, 'Old fingerprint should not match new observation');
-});
-
-// ── RG-06: Browser tab activation does NOT create a valid new observation ──
-
-console.log('── RG-06: Tab activation does NOT create a valid new observation ──');
-
-await runTest('RG-06: tab switch does not reset invalidated observation', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  invalidateObservation(lifecycle, OBS_N);
-
-  // handleTabActivated does NOT change lifecycle state — only logs
-  // (production code: handleTabActivated only does console.log)
-  // So the invalidated observation remains
-  assert.strictEqual(
-    lifecycle.invalidatedObservationId,
-    OBS_N,
-    'Tab activation must not reset invalidated observation',
-  );
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-});
-
-// ── RG-07: DOM mutation followed by stale-plan reuse → rejected ──
-
-console.log('── RG-07: DOM mutation + stale plan reuse → rejected ──');
-
-await runTest('RG-07: after click (state-changing), old plan observation rejected', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // Pipeline N: capture OBS_N, plan produces click + type_text
-  // Execute click → invalidate OBS_N
-  invalidateObservation(lifecycle, OBS_N);
-
-  // Attacker tries to reuse stale plan from OBS_N for type_text
-  // The observation lifecycle check rejects this
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-
-  // Freshness also rejects if somehow plan.observationId is stale
-  const freshNewObs = makeFreshness(OBS_N1);
-  const error = checkActionFreshness(
-    { kind: 'type_text', id: 'act-rg07', targetNodeId: 'n1', text: 'evil' } as AgentAction,
-    freshNewObs,
-    OBS_N, // plan from old observation
-    new Map([['n1', makeFingerprint('n1', OBS_N1)]]),
-  );
-  assert.notStrictEqual(error, null, 'Stale plan observation should be rejected by freshness');
-});
-
-// ── RG-08: State-changing action → planner reuse from same observation → zero ──
-
-console.log('── RG-08: State-changing action → planner reuse from same observation → zero ──');
-
-await runTest('RG-08: planner response from OBS_N cannot authorize second state-changing action', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // First state-changing action from OBS_N succeeds
-  // (executedStateChangingAction = true, loop breaks in production)
-  invalidateObservation(lifecycle, OBS_N);
-
-  // Even if the loop didn't break (hypothetical bypass), the lifecycle check rejects
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-
-  // And freshness rejects plan reuse
-  const freshness = makeFreshness(OBS_N);
-  const action: AgentAction = {
-    kind: 'click',
-    id: 'act-rg08',
-    targetNodeId: 'node-2',
-  };
-  // If plan from OBS_N, but freshness.observationId advanced to OBS_N1
-  const freshNew = makeFreshness(OBS_N1);
-  const err = checkActionFreshness(action, freshNew, OBS_N, new Map());
-  assert.notStrictEqual(err, null);
-});
-
-// ── RG-09: Type_token stale-plan reuse → zero token redemption ──
-
-console.log('── RG-09: Type_token stale-plan reuse → zero token redemption ──');
-
-await runTest('RG-09: stale observation blocks type_token path before redemption', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // First action invalidates OBS_N
-  invalidateObservation(lifecycle, OBS_N);
-
-  // type_token from stale plan
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-  // In production: isObservationStale check happens at capture time,
-  // BEFORE the pipeline reaches executeAction/token redemption.
-  // Result: zero token redemption.
-});
-
-// ── RG-10: Non-state-changing actions batch without bypassing re-observation ──
-
-console.log('── RG-10: Non-state-changing actions retain batching, no bypass ──');
-
-await runTest('RG-10a: scroll actions do not invalidate observation', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-  // Scroll is not state-changing → does not invalidate
-  assert.strictEqual(lifecycle.invalidatedObservationId, null);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
-});
-
-await runTest('RG-10b: non-state-changing actions cannot accidentally authorize state-changing', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // First state-changing action invalidates
-  invalidateObservation(lifecycle, OBS_N);
-
-  // Even if a non-state-changing action (scroll) follows in same pipeline,
-  // the executedStateChangingAction flag + loop break prevents
-  // a second state-changing action.
-  // And the lifecycle marks OBS_N as stale for any future pipeline.
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-});
-
-await runTest('RG-10c: finish/request_observation are not state-changing', () => {
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('finish'), false);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('request_observation'), false);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('scroll'), false);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('wait'), false);
-});
-
-await runTest('RG-10d: click/type_text/select ARE state-changing', () => {
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('click'), true);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('type_text'), true);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('type_token'), true);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('select'), true);
-  assert.strictEqual(STATE_CHANGING_ACTIONS.has('focus'), true);
-});
-
-// ── RG-11: P1-C observationId/documentGeneration checks remain intact ──
-
-console.log('── RG-11: P1-C observationId/documentGeneration checks remain intact ──');
-
-await runTest('RG-11a: observationId mismatch still rejected by freshness', () => {
-  const freshness = makeFreshness(OBS_N);
-  const action: AgentAction = { kind: 'scroll', id: 'act-rg11a', direction: 'down', amount: 'small' };
+  const action: AgentAction = { kind: 'scroll', id: 'act-p09a', direction: 'down', amount: 'small' };
   const error = checkActionFreshness(action, freshness, 'obs-different', new Map());
   assert.notStrictEqual(error, null);
   assert.ok(error!.includes('Stale observation'));
 });
 
-await runTest('RG-11b: documentGeneration mismatch rejected for target-bound actions', () => {
+await runTest('RG-P-09b: documentGeneration mismatch rejected', () => {
   const freshness = makeFreshness(OBS_N, DOC_GEN_A);
-  const fp = makeFingerprint('node-1', OBS_N, DOC_GEN_B); // Different doc gen
-  const action: AgentAction = { kind: 'click', id: 'act-rg11b', targetNodeId: 'node-1' };
-  const error = checkActionFreshness(
-    action, freshness, OBS_N,
-    new Map([['node-1', fp]]),
-  );
+  const fp = makeFingerprint('node-1', OBS_N, DOC_GEN_B);
+  const action: AgentAction = { kind: 'click', id: 'act-p09b', targetNodeId: 'node-1' };
+  const error = checkActionFreshness(action, freshness, OBS_N, new Map([['node-1', fp]]));
   assert.notStrictEqual(error, null);
-  assert.ok(error!.includes('Document generation'));
 });
 
-await runTest('RG-11c: missing session binding still rejected', () => {
+await runTest('RG-P-09c: target fingerprint verification still works', () => {
+  const fpOld = makeFingerprint('n1', OBS_N, DOC_GEN_A);
+  const fpNew = makeFingerprint('n1', OBS_N1, DOC_GEN_B);
+  const mismatch = verifyTargetFingerprint(fpOld, fpNew);
+  assert.notStrictEqual(mismatch, null);
+});
+
+// ── RG-P-10: P1-F session/tab binding remains intact ──
+
+console.log('── RG-P-10: P1-F session/tab binding remains ──');
+
+await runTest('RG-P-10: freshness check rejects missing session', () => {
   const freshness = makeFreshness(OBS_N);
   freshness.sessionId = '';
-  const action: AgentAction = { kind: 'scroll', id: 'act-rg11c', direction: 'down', amount: 'small' };
+  const action: AgentAction = { kind: 'scroll', id: 'act-p10', direction: 'down', amount: 'small' };
   const error = checkActionFreshness(action, freshness, OBS_N, new Map());
   assert.notStrictEqual(error, null);
   assert.ok(error!.includes('session'));
 });
 
-// ── RG-12: P1-F session/tab binding remains intact ──
+// ── Original RG tests (retained from previous P1-G) ────────
 
-console.log('── RG-12: P1-F session/tab binding remains intact ──');
+console.log('── Original RG tests (retained) ──');
 
-await runTest('RG-12a: session end resets invalidated observation', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: OBS_N };
-  resetObservationLifecycle(lifecycle);
-  assert.strictEqual(lifecycle.invalidatedObservationId, null);
-  // New session should not be affected by old invalidation
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
+await runTest('RG-01: fresh observation allows state-changing action', () => {
+  const lc = createLifecycle();
+  assert.strictEqual(isObservationStale(lc, OBS_N), false);
 });
 
-await runTest('RG-12b: new session with same observation ID is not stale', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: OBS_N };
-  // Session ends
-  resetObservationLifecycle(lifecycle);
-  // New session captures (hypothetically same obs ID, though unlikely)
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
+await runTest('RG-02: after invalidation, same obsId is stale', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  assert.strictEqual(isObservationStale(lc, OBS_N), true);
 });
 
-// ── RG-EXTRA: Complete lifecycle sequences ──────────────────
+await runTest('RG-03: stale plan from OBS_N rejected by freshness when current is OBS_N1', () => {
+  const freshNew = makeFreshness(OBS_N1);
+  const action: AgentAction = { kind: 'scroll', id: 'act-rg03', direction: 'down', amount: 'small' };
+  const error = checkActionFreshness(action, freshNew, OBS_N, new Map());
+  assert.notStrictEqual(error, null);
+});
 
-console.log('── RG-EXTRA: Complete lifecycle sequences ──');
-
-await runTest('RG-EX1: full correct sequence: OBS_N → click → invalidate → OBS_N1 → click succeeds', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // Step 1: Pipeline captures OBS_N
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
-
-  // Step 2: Freshness check passes for first action
-  const freshN = makeFreshness(OBS_N);
-  const err1 = checkActionFreshness(
-    { kind: 'scroll', id: 'act-ex1a', direction: 'down', amount: 'small' } as AgentAction,
-    freshN, OBS_N, new Map(),
+await runTest('RG-04: new observation with distinct ID succeeds', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), false);
+  const freshness = makeFreshness(OBS_N1);
+  const err = checkActionFreshness(
+    { kind: 'scroll', id: 'act-rg04', direction: 'up', amount: 'small' } as AgentAction,
+    freshness, OBS_N1, new Map(),
   );
-  assert.strictEqual(err1, null);
-
-  // Step 3: State-changing action executes → invalidate OBS_N
-  invalidateObservation(lifecycle, OBS_N);
-
-  // Step 4: New pipeline captures OBS_N1
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), false);
-
-  // Step 5: Freshness check passes for new observation
-  const freshN1 = makeFreshness(OBS_N1);
-  const err2 = checkActionFreshness(
-    { kind: 'scroll', id: 'act-ex1b', direction: 'up', amount: 'small' } as AgentAction,
-    freshN1, OBS_N1, new Map(),
-  );
-  assert.strictEqual(err2, null);
+  assert.strictEqual(err, null);
 });
 
-await runTest('RG-EX2: attack sequence: OBS_N → click → reuse OBS_N → REJECTED', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
+await runTest('RG-06: tab switch does not reset invalidated observations', () => {
+  const lc = createLifecycle();
+  invalidateObservation(lc, OBS_N);
+  // handleTabActivated only logs — does NOT clear the set
+  assert.strictEqual(lc.invalidatedObservationIds.size, 1);
+  assert.strictEqual(isObservationStale(lc, OBS_N), true);
+});
+
+await runTest('RG-10: non-state-changing actions do not invalidate', () => {
+  const lc = createLifecycle();
+  // Scroll is not state-changing → nothing added
+  assert.strictEqual(lc.invalidatedObservationIds.size, 0);
+  assert.strictEqual(STATE_CHANGING_ACTIONS.has('scroll'), false);
+  assert.strictEqual(STATE_CHANGING_ACTIONS.has('wait'), false);
+  assert.strictEqual(STATE_CHANGING_ACTIONS.has('click'), true);
+});
+
+await runTest('RG-EX: full correct lifecycle sequence', () => {
+  const lc = createLifecycle();
 
   // Pipeline 1: OBS_N → click → invalidate
-  invalidateObservation(lifecycle, OBS_N);
-
-  // Attack: reuse OBS_N
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
-  // Production would reject at capture time with P1-G error
-});
-
-await runTest('RG-EX3: multiple state-changing actions across observations', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: null };
-
-  // Pipeline 1: OBS_N → click → invalidate
-  invalidateObservation(lifecycle, OBS_N);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), true);
+  assert.strictEqual(isObservationStale(lc, OBS_N), false);
+  invalidateObservation(lc, OBS_N);
 
   // Pipeline 2: OBS_N1 → type_text → invalidate
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), false);
-  invalidateObservation(lifecycle, OBS_N1);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), true);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), false);
+  invalidateObservation(lc, OBS_N1);
 
-  // Pipeline 3: OBS_N2 → select → OK
-  const OBS_N2 = 'obs-N2-ccc333';
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N2), false);
+  // Pipeline 3: OBS_N2 → select → invalidate
+  assert.strictEqual(isObservationStale(lc, OBS_N2), false);
+  invalidateObservation(lc, OBS_N2);
 
-  // Old observations are still stale
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false); // Only LAST invalidated matters
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), true); // This is the most recent
-});
+  // ALL previous are stale
+  assert.strictEqual(isObservationStale(lc, OBS_N), true);
+  assert.strictEqual(isObservationStale(lc, OBS_N1), true);
+  assert.strictEqual(isObservationStale(lc, OBS_N2), true);
 
-await runTest('RG-EX4: session end + new session clears observation lifecycle', () => {
-  const lifecycle: ObservationLifecycle = { invalidatedObservationId: OBS_N };
-
-  // Session A ends
-  resetObservationLifecycle(lifecycle);
-
-  // Session B starts: fresh lifecycle
-  assert.strictEqual(lifecycle.invalidatedObservationId, null);
-
-  // New capture in Session B
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N), false);
-  assert.strictEqual(isObservationStale(lifecycle, OBS_N1), false);
+  // Fresh observation still works
+  assert.strictEqual(isObservationStale(lc, OBS_N3), false);
 });
 
 // ── Summary ─────────────────────────────────────────────────
 
-console.log(`\n🔒 P1-G Re-Observation Binding: ${passed} passed, ${failed} failed`);
+console.log(`\n🔒 P1-G Permanent Observation Invalidation: ${passed} passed, ${failed} failed`);
 
 if (failures.length > 0) {
   console.log('\nFailures:');

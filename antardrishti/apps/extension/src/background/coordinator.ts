@@ -141,14 +141,18 @@ export class Coordinator {
 
   // -- P1-G: Observation lifecycle tracking ---------------------------------
   /**
-   * The most recently invalidated observation ID.
-   * Set when a state-changing action executes successfully.
-   * Any subsequent pipeline that captures the same observationId
-   * is rejected — the system MUST re-observe after a state change.
+   * All observation IDs invalidated during the current session.
+   * An observation is added when a state-changing action executes
+   * successfully against it. Any subsequent pipeline that captures
+   * the same observationId is rejected — the system MUST re-observe.
    *
-   * Reset on session end (new session starts fresh).
+   * Uses a Set (not a single ID) so that ALL consumed observations
+   * remain permanently invalid for the session lifetime, not just
+   * the most recent one.
+   *
+   * Cleared on session end (new session starts fresh).
    */
-  _invalidatedObservationId: string | null = null;
+  _invalidatedObservationIds: Set<string> = new Set();
 
   // -- Offscreen inference state ------------------------------------------
   /**
@@ -903,8 +907,7 @@ export class Coordinator {
       // marked invalid. If the capture returns the same observationId (e.g.
       // due to cache race or replay), reject immediately.
       // A new observation MUST have a distinct observationId.
-      if (this._invalidatedObservationId !== null &&
-          captureResult.observationId === this._invalidatedObservationId) {
+      if (this._invalidatedObservationIds.has(captureResult.observationId as string)) {
         console.error('[Coordinator] P1-G: STALE OBSERVATION — obs',
           captureResult.observationId, 'was invalidated by prior state change');
         sendResponse({
@@ -1353,7 +1356,7 @@ export class Coordinator {
           // No subsequent pipeline may reuse this observationId for a
           // state-changing action. The next pipeline MUST capture a
           // fresh observation with a distinct observationId.
-          this._invalidatedObservationId = captureResult.observationId as string;
+          this._invalidatedObservationIds.add(captureResult.observationId as string);
           // Invalidate cache so next invocation re-observes
           this.capture.invalidateCache();
           console.log('[Coordinator] P1-G: Observation', captureResult.observationId,
@@ -1776,7 +1779,7 @@ export class Coordinator {
     this.vault.revokeExpired();
     // P1-G: Reset observation lifecycle on session end.
     // New sessions start with no invalidated observation.
-    this._invalidatedObservationId = null;
+    this._invalidatedObservationIds.clear();
     this.state = { ...INITIAL_STATE };
     await this.persistState();
   }
