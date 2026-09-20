@@ -127,6 +127,23 @@ export async function executeAction(payload: {
     }
   }
 
+  // P1-H: Content-side execution authority boundary (defense-in-depth).
+  // Target-bound actions MUST resolve through the authoritative nodeRegistry
+  // which is populated ONLY from the DOM harvester. Visual-only, unresolved,
+  // and forged targets will not be present in the registry.
+  // This check is independent of planner validation — it enforces authority
+  // at the actual execution boundary regardless of how the message arrived.
+  if (TARGET_BOUND_KINDS.has(kind) && targetNodeId) {
+    if (!nodeRegistry.has(targetNodeId)) {
+      return {
+        actionId,
+        success: false,
+        outcome: 'rejected',
+        error: `P1-H: target ${targetNodeId} is not in the authoritative DOM registry — execution rejected`,
+      };
+    }
+  }
+
   // P1-D: Enforce role match fail-closed for ALL target-bound actions.
   // expectedRole is an execution constraint, not advisory metadata.
   // Resolves live DOM role via the same sceneGraphInferRole used by

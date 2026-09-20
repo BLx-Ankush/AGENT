@@ -48,6 +48,35 @@ export interface SceneContext {
   }>;
 }
 
+// ── P1-H: Centralized execution authority check ──────────────
+
+/**
+ * P1-H: Determine if a target node has execution authority.
+ *
+ * Execution authority comes ONLY from the authoritative DOM harvest.
+ * A node is execution-authoritative if and only if it has a valid
+ * TargetFingerprint produced from the current DOM harvest.
+ *
+ * Visual-only, unresolved, nearby, and contains-only visual regions
+ * do NOT have fingerprints and therefore CANNOT be executable.
+ *
+ * This check does NOT rely on:
+ *   - ID prefixes (e.g. vis-*)
+ *   - planner-provided source metadata
+ *   - visual relation assertions
+ *   - bbox/name similarity
+ *   - candidateTargetId assertions
+ *
+ * It relies solely on whether the local authoritative harvest state
+ * includes this nodeId with a valid fingerprint.
+ */
+export function isAuthoritativeDomTarget(
+  nodeId: string,
+  targetFingerprints: Map<string, TargetFingerprint>,
+): boolean {
+  return targetFingerprints.has(nodeId);
+}
+
 // ── Validator ────────────────────────────────────────────────
 
 /**
@@ -71,6 +100,17 @@ export function validateAction(
   if ('targetNodeId' in action && action.targetNodeId) {
     if (!context.nodeIds.has(action.targetNodeId)) {
       errors.push(`Target node not found: ${action.targetNodeId}`);
+    }
+  }
+
+  // P1-H: Visual execution authority boundary.
+  // Target-bound actions MUST target an execution-authoritative DOM node.
+  // Visual-only, unresolved, and non-DOM nodes are planning-visible but
+  // non-executable. Authority is established by the presence of a valid
+  // TargetFingerprint from the current authoritative DOM harvest.
+  if (TARGET_BOUND_ACTIONS.has(action.kind) && 'targetNodeId' in action && action.targetNodeId) {
+    if (!isAuthoritativeDomTarget(action.targetNodeId, context.targetFingerprints)) {
+      errors.push(`P1-H: target ${action.targetNodeId} is not an execution-authoritative DOM node`);
     }
   }
 
