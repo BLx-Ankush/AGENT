@@ -57,10 +57,40 @@ const TARGET_BOUND_KINDS = new Set([
 
 // ── Action result ────────────────────────────────────────────
 
+// ── P1-D: Role match enforcement ─────────────────────────────
+
+/**
+ * P1-D: Enforce that the live DOM role matches expectedRole.
+ *
+ * Resolves the authoritative P0-B nodeId → exact HTMLElement,
+ * computes the live role using the same sceneGraphInferRole
+ * used by the harvester, and fails closed on mismatch.
+ *
+ * @returns null if roles match, or an error string if mismatch
+ */
+function enforceRoleMatch(
+  nodeId: string,
+  expectedRole: string,
+): string | null {
+  const el = nodeRegistry.get(nodeId);
+  if (!el) {
+    return `P1-D: node ${nodeId} not in P0-B registry — cannot verify role`;
+  }
+  if (!el.isConnected) {
+    return `P1-D: node ${nodeId} removed from DOM — cannot verify role`;
+  }
+
+  const liveRole = sceneGraphInferRole(el);
+  if (liveRole !== expectedRole) {
+    return `P1-D role mismatch: expected "${expectedRole}", live DOM role is "${liveRole}" — fail closed`;
+  }
+  return null;
+}
+
 export interface ActionResult {
   actionId: string;
   success: boolean;
-  outcome: 'success' | 'failure' | 'ambiguous' | 'navigated' | 'rejected' | 'toctou_rejected';
+  outcome: 'success' | 'failure' | 'ambiguous' | 'navigated' | 'rejected' | 'toctou_rejected' | 'role_mismatch';
   newDocumentGeneration?: string;
   error?: string;
 }
@@ -97,10 +127,26 @@ export async function executeAction(payload: {
     }
   }
 
+  // P1-D: Enforce role match fail-closed for ALL target-bound actions.
+  // expectedRole is an execution constraint, not advisory metadata.
+  // Resolves live DOM role via the same sceneGraphInferRole used by
+  // the harvester, and fails closed if the live role differs.
+  if (TARGET_BOUND_KINDS.has(kind) && targetNodeId && expectedRole) {
+    const roleMismatchError = enforceRoleMatch(targetNodeId, expectedRole);
+    if (roleMismatchError) {
+      return {
+        actionId,
+        success: false,
+        outcome: 'role_mismatch',
+        error: roleMismatchError,
+      };
+    }
+  }
+
   try {
     switch (kind) {
       case 'click':
-        return await executeClick(actionId, targetNodeId!, expectedRole, expectedFingerprint!);
+        return await executeClick(actionId, targetNodeId!, expectedFingerprint!);
 
       case 'focus':
         return executeFocus(actionId, targetNodeId!, expectedFingerprint!);
@@ -149,7 +195,6 @@ export async function executeAction(payload: {
 async function executeClick(
   actionId: string,
   targetNodeId: string,
-  expectedRole: string | undefined,
   expectedFingerprint: TargetFingerprint,
 ): Promise<ActionResult> {
   const el = resolveTarget(targetNodeId);
@@ -160,16 +205,6 @@ async function executeClick(
       outcome: 'failure',
       error: `Target not found: ${targetNodeId}`,
     };
-  }
-
-  // Verify role if expected
-  if (expectedRole) {
-    const actualRole = el.getAttribute('role') || sceneGraphInferRole(el);
-    if (actualRole !== expectedRole && expectedRole !== 'generic') {
-      console.warn(
-        `[Executor] Role mismatch: expected ${expectedRole}, got ${actualRole}`,
-      );
-    }
   }
 
   // Verify element is clickable via hit-test
