@@ -131,7 +131,8 @@ export interface ActionOutcomePayload {
     | 'ambiguous'
     | 'navigated'
     | 'rejected'
-    | 'toctou_rejected';
+    | 'toctou_rejected'
+    | 'role_mismatch';
   newDocumentGeneration?: string;
   error?: string;
 }
