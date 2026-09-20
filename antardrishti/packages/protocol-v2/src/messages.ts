@@ -24,6 +24,8 @@ export const MESSAGE_TYPES = {
   EXECUTE_ACTION: 'background:execute-action',
   REQUEST_HIT_TEST: 'background:request-hit-test',
   VERIFY_TARGET: 'background:verify-target',
+  /** P1-C: Delivers redeemed token value AFTER content-side TOCTOU passes */
+  DELIVER_TOKEN_VALUE: 'background:deliver-token-value',
 
   // Background → UI
   STATUS_UPDATE: 'background:status-update',

@@ -19,7 +19,7 @@ import {
 
 import { harvestDOM, getLastHarvestElementMap } from '@antardrishti/scene-graph';
 import { hitTestNode, hitTestMultiPoint } from '@antardrishti/scene-graph';
-import { executeAction, setNodeRegistry, queryTargetCurrentState } from './action-executor';
+import { executeAction, setNodeRegistry, queryTargetCurrentState, verifyTargetBeforeExecution } from './action-executor';
 
 // ── State ────────────────────────────────────────────────────
 
@@ -67,6 +67,10 @@ chrome.runtime.onMessage.addListener(
 
       case MESSAGE_TYPES.VERIFY_TARGET:
         handleVerifyTarget(msg.payload, sendResponse);
+        break;
+
+      case MESSAGE_TYPES.DELIVER_TOKEN_VALUE:
+        handleDeliverTokenValue(msg.payload, sendResponse);
         break;
 
       default:
@@ -125,6 +129,8 @@ async function handleExecuteAction(
     targetNodeId?: string;
     value?: string;
     expectedRole?: string;
+    deferredRedemption?: boolean;
+    tokenRef?: string;
     expectedFingerprint?: {
       nodeId: string; role: string; name: string;
       ancestry: string;
@@ -139,12 +145,116 @@ async function handleExecuteAction(
     return;
   }
 
-  // P1-C: executeAction now handles TOCTOU internally —
+  // P1-C: type_token with deferred redemption — TOCTOU check ONLY.
+  // The coordinator has NOT redeemed the token yet.
+  // We verify the target, respond with toctouPassed, and wait for
+  // DELIVER_TOKEN_VALUE with the raw value after redemption.
+  if (p.kind === 'type_token' && p.deferredRedemption) {
+    const toctouResult = verifyTargetForDeferredRedemption(
+      p.targetNodeId,
+      p.expectedFingerprint,
+    );
+    sendResponse(toctouResult);
+    return;
+  }
+
+  // P1-C: executeAction handles TOCTOU internally —
   // it verifies the fingerprint IMMEDIATELY before each DOM mutation,
   // and fails closed if expectedFingerprint is missing for target-bound actions.
   const result = await executeAction(p);
 
   // Report outcome back to coordinator
+  chrome.runtime
+    .sendMessage(
+      createMessage(
+        MESSAGE_TYPES.ACTION_OUTCOME,
+        {
+          actionId: result.actionId,
+          success: result.success,
+          outcome: result.outcome,
+          newDocumentGeneration: result.newDocumentGeneration,
+          error: result.error,
+        },
+        'content',
+      ),
+    )
+    .catch(() => {});
+
+  sendResponse({ ack: true, ...result });
+}
+
+/**
+ * P1-C: Verify target TOCTOU for deferred type_token redemption.
+ * Returns { toctouPassed: true } if the target is still valid,
+ * or { toctouPassed: false, error } if stale/missing.
+ */
+function verifyTargetForDeferredRedemption(
+  targetNodeId: string | undefined,
+  expectedFingerprint: unknown,
+): { toctouPassed: boolean; error?: string } {
+  if (!targetNodeId) {
+    return { toctouPassed: false, error: 'P1-C: missing targetNodeId for type_token' };
+  }
+  if (!expectedFingerprint) {
+    return { toctouPassed: false, error: 'P1-C: missing expectedFingerprint for type_token — fail closed' };
+  }
+  const fp = expectedFingerprint as {
+    nodeId: string; role: string; name: string;
+    ancestry: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    frameId: number; documentGeneration: string;
+    observationId: string;
+  };
+  if (!fp.nodeId || !fp.role) {
+    return { toctouPassed: false, error: 'P1-C: malformed expectedFingerprint — fail closed' };
+  }
+
+  const toctouError = verifyTargetBeforeExecution(targetNodeId, fp as any);
+  if (toctouError) {
+    return { toctouPassed: false, error: toctouError };
+  }
+  return { toctouPassed: true };
+}
+
+/**
+ * P1-C: Handle DELIVER_TOKEN_VALUE — Phase 2 of deferred type_token.
+ * The coordinator has redeemed the token ONLY because phase 1 TOCTOU passed.
+ * We do a SECOND TOCTOU check immediately before DOM mutation.
+ */
+async function handleDeliverTokenValue(
+  payload: unknown,
+  sendResponse: (r: unknown) => void,
+): Promise<void> {
+  const p = payload as {
+    actionId: string;
+    targetNodeId: string;
+    value: string;
+    expectedFingerprint?: {
+      nodeId: string; role: string; name: string;
+      ancestry: string;
+      bbox: { x: number; y: number; w: number; h: number };
+      frameId: number; documentGeneration: string;
+      observationId: string;
+    };
+  };
+
+  if (!p?.actionId || !p?.targetNodeId || p.value === undefined) {
+    sendResponse({ ack: false, error: 'Missing required fields' });
+    return;
+  }
+
+  // Apply the redeemed value via executeAction (type_text path).
+  // executeAction's internal TOCTOU check will run IMMEDIATELY
+  // before the DOM mutation — this is the SECOND TOCTOU gate.
+  const result = await executeAction({
+    actionId: p.actionId,
+    kind: 'type_text', // type_token uses type_text mechanics for DOM mutation
+    targetNodeId: p.targetNodeId,
+    value: p.value,
+    expectedFingerprint: p.expectedFingerprint as any,
+  });
+
+  // Report outcome
   chrome.runtime
     .sendMessage(
       createMessage(
