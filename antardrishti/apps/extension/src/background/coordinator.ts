@@ -139,6 +139,17 @@ export class Coordinator {
   private planner: PlannerAdapter = new DeterministicPlanner();
   private perception = new PerceptionPipeline();
 
+  // -- P1-G: Observation lifecycle tracking ---------------------------------
+  /**
+   * The most recently invalidated observation ID.
+   * Set when a state-changing action executes successfully.
+   * Any subsequent pipeline that captures the same observationId
+   * is rejected — the system MUST re-observe after a state change.
+   *
+   * Reset on session end (new session starts fresh).
+   */
+  _invalidatedObservationId: string | null = null;
+
   // -- Offscreen inference state ------------------------------------------
   /**
    * Resolves when the offscreen document (Chrome) or direct model load
@@ -887,6 +898,23 @@ export class Coordinator {
         return;
       }
 
+      // P1-G: Stale observation check.
+      // After a state-changing action, the observation that authorized it is
+      // marked invalid. If the capture returns the same observationId (e.g.
+      // due to cache race or replay), reject immediately.
+      // A new observation MUST have a distinct observationId.
+      if (this._invalidatedObservationId !== null &&
+          captureResult.observationId === this._invalidatedObservationId) {
+        console.error('[Coordinator] P1-G: STALE OBSERVATION — obs',
+          captureResult.observationId, 'was invalidated by prior state change');
+        sendResponse({
+          ack: false,
+          error: `P1-G: observation ${captureResult.observationId} already consumed by a state-changing action`,
+        });
+        this.setPhase('idle');
+        return;
+      }
+
       // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
         sessionTabId,
@@ -1321,9 +1349,15 @@ export class Coordinator {
 
         if (isStateChanging) {
           executedStateChangingAction = true;
+          // P1-G: Mark this observation as consumed/invalidated.
+          // No subsequent pipeline may reuse this observationId for a
+          // state-changing action. The next pipeline MUST capture a
+          // fresh observation with a distinct observationId.
+          this._invalidatedObservationId = captureResult.observationId as string;
           // Invalidate cache so next invocation re-observes
           this.capture.invalidateCache();
-          console.log('[Coordinator] State-changing action executed — cache invalidated for re-observation');
+          console.log('[Coordinator] P1-G: Observation', captureResult.observationId,
+            'invalidated after state-changing action — re-observation required');
         }
 
         // finish/request_observation terminate the sequence
@@ -1740,6 +1774,9 @@ export class Coordinator {
 
     this.capture.invalidateCache();
     this.vault.revokeExpired();
+    // P1-G: Reset observation lifecycle on session end.
+    // New sessions start with no invalidated observation.
+    this._invalidatedObservationId = null;
     this.state = { ...INITIAL_STATE };
     await this.persistState();
   }
