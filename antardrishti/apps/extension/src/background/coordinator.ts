@@ -564,6 +564,27 @@ export class Coordinator {
     return sender.url.startsWith(extensionOrigin);
   }
 
+  /**
+   * P1-F stale-pipeline guard: verify that an in-flight pipeline's
+   * captured session+tab binding is still the current active binding.
+   *
+   * Returns true ONLY when:
+   *   - this.state.isActive === true
+   *   - this.state.sessionId === captured pipelineSessionId
+   *   - this.state.activeTabId === captured pipelineTabId
+   *
+   * If the session was stopped, replaced, or the bound tab closed
+   * during an async await, this returns false and the pipeline MUST
+   * abort without executing any action or redeeming any token.
+   */
+  _isCurrentPipelineBinding(pipelineSessionId: string, pipelineTabId: number): boolean {
+    return (
+      this.state.isActive === true &&
+      this.state.sessionId === pipelineSessionId &&
+      this.state.activeTabId === pipelineTabId
+    );
+  }
+
   // -- Message handling ----------------------------------------------------
 
   handleMessage(
@@ -840,6 +861,10 @@ export class Coordinator {
     // P1-F: All downstream operations MUST use the session-bound tab ID,
     // never the payload's claimed tabId. This is the authoritative binding.
     const sessionTabId = this.state.activeTabId!;
+    // P1-F stale-pipeline defense: snapshot BOTH session ID and tab ID.
+    // If the session is stopped/replaced during async pipeline execution,
+    // the guard detects the mismatch and aborts the stale pipeline.
+    const pipelineSessionId = this.state.sessionId!;
 
     try {
       // ── Step 1: Capture visible tab ─────────────────────
@@ -854,6 +879,14 @@ export class Coordinator {
         bytes: captureResult.imageDataUrl.length,
       });
 
+      // P1-F stale-pipeline check: after capture await
+      if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+        console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during capture');
+        sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during capture' });
+        this.setPhase('idle');
+        return;
+      }
+
       // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
         sessionTabId,
@@ -865,6 +898,14 @@ export class Coordinator {
         faceRegions: harvestResult?.canvasContext?.faceRegions?.length || 0,
         controlRegions: harvestResult?.canvasContext?.controlRegions?.length || 0,
       });
+
+      // P1-F stale-pipeline check: after harvest await
+      if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+        console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during harvest');
+        sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during harvest' });
+        this.setPhase('idle');
+        return;
+      }
 
       // -- Step 3: Perception --
       // Chrome: send imageDataUrl (PNG string) to offscreen document.
@@ -952,6 +993,14 @@ export class Coordinator {
         });
       } else {
         console.log('[Coordinator] [3/8] Perception skipped (no image data)');
+      }
+
+      // P1-F stale-pipeline check: after perception await
+      if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+        console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during perception');
+        sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during perception' });
+        this.setPhase('idle');
+        return;
       }
       // ── Step 4: Build unified scene graph ──────────────────
       // Merge DOM nodes with visual-only nodes from perception
@@ -1052,6 +1101,14 @@ export class Coordinator {
         bodyHash: (verification as any).bodyHash?.substring(0, 16) + '…',
       });
 
+      // P1-F stale-pipeline check: after egress verification await
+      if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+        console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during egress verification');
+        sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during egress verification' });
+        this.setPhase('idle');
+        return;
+      }
+
       // ── Step 8: Plan ─────────────────────────────────────
       this.setPhase('planning');
       let plannerResponse: PlannerResponse;
@@ -1128,6 +1185,14 @@ export class Coordinator {
         return;
       }
 
+      // P1-F stale-pipeline check: after planner await
+      if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+        console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during planning');
+        sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during planning' });
+        this.setPhase('idle');
+        return;
+      }
+
       // ── ONE ACTION → RE-OBSERVE (contract §1.5) ──────────
       // Execute ONLY the first state-changing action.
       // Non-state-changing actions (scroll, wait, finish) can be batched.
@@ -1154,6 +1219,14 @@ export class Coordinator {
           }
           console.log('[Coordinator] P0-A: Action APPROVED:', action.id);
           this.setPhase('executing');
+
+          // P1-F stale-pipeline check: after confirmation await
+          if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+            console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during confirmation');
+            sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated during confirmation' });
+            this.setPhase('idle');
+            return;
+          }
         }
 
         // P1-C: FINAL FRESHNESS CHECK — immediately before execution
@@ -1226,6 +1299,14 @@ export class Coordinator {
           // The next pipeline invocation will re-observe and replan
           console.log('[Coordinator] One-action boundary: halting at', action.kind, '(re-observe required)');
           break;
+        }
+
+        // P1-F stale-pipeline check: immediately before action execution
+        if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
+          console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed before execution of', action.kind);
+          sendResponse({ ack: false, error: 'P1-F: stale pipeline — session invalidated before execution' });
+          this.setPhase('idle');
+          return;
         }
 
         console.log('[Coordinator] Executing:', action.kind, action.id);
