@@ -87,6 +87,76 @@ The AI sees `<SENSITIVE_FACE_001>` instead of your photo. It sees `<SENSITIVE_AA
                     └───────────────────────┘
 ```
 
+### Privacy Pipeline Flowchart
+
+> The complete data flow — from raw DOM/screen pixels through on-device privacy enforcement, egress gating, cloud reasoning, and local-only execution.
+
+```mermaid
+flowchart TD
+    subgraph BOUNDARY["ON-DEVICE PRIVACY BOUNDARY · raw private pixels + values never cross"]
+        direction TB
+        DOM["1 · DOM"] --> A11Y["A11Y"] --> SCREEN["SCREEN"]
+        SCREEN --> ROUTER["2 · EVENT + RISK ROUTER"]
+        ROUTER --> LOW["LOW · DOM / A11Y"]
+        ROUTER --> MED["MED · OCR + CV"]
+        ROUTER --> HIGH["HIGH · ViT / VLM"]
+        LOW --> SG["3 · UNIFIED SCENE GRAPH"]
+        MED --> SG
+        HIGH --> SG
+        SG --> PE["4 · PRIVACY ENGINE<br/>PII · faces · secrets"]
+        PE --> TOK["5 · TOKENIZE + REDACT"]
+        TOK --> SAN["6 · SANITIZED STATE"]
+
+        %% bounded egress-failure feedback loop (local only)
+        EBLOCK["BLOCK TRANSMISSION<br/>DATA NEVER LEAVES BROWSER"]
+        RESAN{"RE-SANITIZE / RE-EVALUATE<br/>first failure?"}
+        EABORT["BLOCK & ABORT<br/>DATA NEVER LEAVES BROWSER"]
+        EBLOCK --> RESAN
+        RESAN -->|"yes · retry once"| PE
+        RESAN -->|"no · already retried"| EABORT
+    end
+
+    SAN --> EGRESS{"EGRESS GATE<br/>allow only sanitized · fail closed"}
+    EGRESS -->|"PASS · only sanitized data"| CLOUD["CLOUD REASONER<br/>LLM / VLM planning + reasoning"]
+    EGRESS -->|"FAIL"| EBLOCK
+    CLOUD --> PLAN["REMOTE PLAN / ACTION PLAN<br/>tokens + capabilities"]
+
+    subgraph LOCALEXEC["7 · REMOTE PLAN RETURNS → LOCAL POLICY CHECK → LOCAL EXECUTION"]
+        direction TB
+        VALIDATE["LOCAL ACTION VALIDATION<br/>return to → local"]
+        SAFETY{"ACTION SAFETY GATE"}
+        CONFIRM{"USER CONFIRMATION"}
+        TOCTOU["FINAL TARGET / FRESHNESS / TOCTOU CHECK"]
+        ADAPTER["EXECUTION ADAPTER<br/>DOM / A11Y = default · WebMCP = optional"]
+        BROWSER["REAL BROWSER"]
+        BLOCK1["BLOCK"]
+        BLOCK2["BLOCK"]
+        VAULT["LOCAL TOKEN VAULT<br/>EMAIL_07 → value"]
+        REDEEM["REDEEM ONLY AFTER VALIDATION"]
+
+        VALIDATE --> SAFETY
+        SAFETY -->|REJECT| BLOCK1
+        SAFETY -->|ALLOW| CONFIRM
+        CONFIRM -->|REJECT| BLOCK2
+        CONFIRM -->|APPROVE| TOCTOU
+        TOCTOU --> ADAPTER
+        ADAPTER --> BROWSER
+        VAULT --> REDEEM
+        REDEEM -.->|"resolve sensitive values"| ADAPTER
+    end
+
+    PLAN --> VALIDATE
+    %% normal perception feedback loop — distinct from the egress loop
+    BROWSER -.->|"PAGE / UI CHANGE → RE-EVALUATE LOCALLY"| DOM
+
+    classDef fail fill:#fdecea,stroke:#c0392b,stroke-width:2px,color:#922b21
+    classDef abort fill:#c0392b,stroke:#7b241c,stroke-width:2px,color:#fff
+    classDef secret fill:#fff4e5,stroke:#e67e22,stroke-width:2px,color:#a04000
+    class EBLOCK,RESAN,BLOCK1,BLOCK2 fail
+    class EABORT abort
+    class VAULT,REDEEM secret
+```
+
 ### Monorepo Structure
 
 ```
