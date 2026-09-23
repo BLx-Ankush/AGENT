@@ -78,6 +78,13 @@ const STATE_CHANGING_ACTIONS = new Set([
   'click', 'type_text', 'type_token', 'select', 'submit',
 ]);
 
+// ── Execution result type ────────────────────────────────────
+
+/** Explicit execution outcome — never infer success from void. */
+type ExecutionResult =
+  | { executed: true }
+  | { executed: false; reason: string };
+
 // ── P0-A: Confirmation timeout ──────────────────────────────
 // High-risk actions that are not confirmed within this window
 // are rejected (fail closed).
@@ -1391,13 +1398,24 @@ export class Coordinator {
         }
 
         console.log('[Coordinator] Executing:', action.kind, action.id);
-        await this.executeAction(
+        const execResult = await this.executeAction(
           sessionTabId,
           action,
           captureResult.stamp.documentGeneration,
           captureResult.stamp.topOrigin,
           verifiedFingerprint,
         );
+
+        // Execution outcome gate: only proceed on genuine success.
+        // A failed action MUST NOT increment the count, invalidate
+        // the observation, or allow subsequent actions to run.
+        if (!execResult.executed) {
+          console.error('[Coordinator] Execution FAILED for', action.kind, action.id, ':', execResult.reason);
+          sendResponse({ ack: false, error: `Execution failed: ${execResult.reason}` });
+          this.setPhase('idle');
+          return;
+        }
+
         executedActionCount++;
 
         if (isStateChanging) {
@@ -1485,7 +1503,7 @@ export class Coordinator {
     documentGeneration: string,
     origin: string,
     expectedFingerprint?: TargetFingerprint,
-  ): Promise<void> {
+  ): Promise<ExecutionResult> {
     try {
       // ── type_token: TWO-PHASE REDEMPTION ─────────────────────
       //
@@ -1517,9 +1535,9 @@ export class Coordinator {
         )) as { toctouPassed?: boolean; error?: string };
 
         if (!toctouResponse || !toctouResponse.toctouPassed) {
-          console.error('[Coordinator] P1-C: type_token TOCTOU failed — vault NOT redeemed:',
-            toctouResponse?.error || 'unknown');
-          return; // Token NOT redeemed — safe
+          const reason = `P1-C: type_token TOCTOU failed — vault NOT redeemed: ${toctouResponse?.error || 'unknown'}`;
+          console.error('[Coordinator]', reason);
+          return { executed: false, reason };
         }
 
         // Phase 2: TOCTOU passed → redeem token now
@@ -1530,13 +1548,14 @@ export class Coordinator {
           origin,
         );
         if ('error' in redemption) {
-          console.error('[Coordinator] Token redemption failed:', redemption.error);
-          return;
+          const reason = `Token redemption failed: ${redemption.error}`;
+          console.error('[Coordinator]', reason);
+          return { executed: false, reason };
         }
         console.log('[Coordinator] Token redeemed AFTER content-side TOCTOU passed');
 
         // Deliver the redeemed value to content for DOM mutation
-        await chrome.tabs.sendMessage(tabId, createMessage(
+        const deliverResponse = await chrome.tabs.sendMessage(tabId, createMessage(
           MESSAGE_TYPES.DELIVER_TOKEN_VALUE,
           {
             actionId: action.id,
@@ -1545,8 +1564,12 @@ export class Coordinator {
             expectedFingerprint,
           },
           'background',
-        ));
-        return;
+        )) as { success?: boolean; error?: string } | undefined;
+
+        if (deliverResponse && deliverResponse.success === false) {
+          return { executed: false, reason: `Token delivery failed: ${deliverResponse.error || 'unknown'}` };
+        }
+        return { executed: true };
       }
 
       // ── All other actions: single-phase execution ────────────
@@ -1555,7 +1578,7 @@ export class Coordinator {
         resolvedValue = action.text;
       }
 
-      await chrome.tabs.sendMessage(tabId, createMessage(
+      const actionResponse = await chrome.tabs.sendMessage(tabId, createMessage(
         MESSAGE_TYPES.EXECUTE_ACTION,
         {
           actionId: action.id,
@@ -1566,9 +1589,17 @@ export class Coordinator {
           expectedFingerprint,
         },
         'background',
-      ));
+      )) as { success?: boolean; error?: string } | undefined;
+
+      // Check the content-script response for explicit failure
+      if (actionResponse && actionResponse.success === false) {
+        return { executed: false, reason: actionResponse.error || 'Content-script execution failed' };
+      }
+      return { executed: true };
     } catch (e) {
-      console.warn('[Coordinator] Action execution failed:', e);
+      const reason = `Action execution exception: ${e instanceof Error ? e.message : String(e)}`;
+      console.error('[Coordinator]', reason);
+      return { executed: false, reason };
     }
   }
 
