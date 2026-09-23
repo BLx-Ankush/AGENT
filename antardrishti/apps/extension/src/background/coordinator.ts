@@ -34,6 +34,8 @@ import {
   type ActionOutcomePayload,
   type AgentAction,
   ALLOWED_ACTION_KINDS,
+  classifyTargetRisk,
+  type TargetRiskContext,
 } from '@antardrishti/protocol-v2';
 
 import { TokenVault } from '@antardrishti/privacy';
@@ -1234,12 +1236,27 @@ export class Coordinator {
         createdAt: new Date().toISOString(),
       };
 
+      // P0.2b: Build targetContext from authoritative harvest nodes.
+      // Each node is classified locally using DOM fields (role, name,
+      // visibleText, tag, inputType, affordances). The planner CANNOT
+      // override or populate this map.
+      const targetContext = new Map<string, TargetRiskContext>();
+      for (const node of (harvestResult?.nodes || [])) {
+        if (node && node.id) {
+          const risk = classifyTargetRisk(node);
+          if (risk.isSubmit || risk.isPayment || risk.isDestructive || risk.isSend || risk.isUpload) {
+            targetContext.set(node.id, risk);
+          }
+        }
+      }
+
       const sceneContext: SceneContext = {
         nodeIds,
         freshness: currentFreshness,
         targetFingerprints,
         planObservationId: captureResult.observationId as string,
         tokenValidator: (token: string) => this.vault.hasToken(token),
+        targetContext,
       };
 
       const validation = validatePlan(
