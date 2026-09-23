@@ -1566,8 +1566,8 @@ export class Coordinator {
           'background',
         )) as { success?: boolean; error?: string } | undefined;
 
-        if (deliverResponse && deliverResponse.success === false) {
-          return { executed: false, reason: `Token delivery failed: ${deliverResponse.error || 'unknown'}` };
+        if (!deliverResponse || deliverResponse.success !== true) {
+          return { executed: false, reason: `Token delivery failed: ${deliverResponse?.error || 'no success confirmation'}` };
         }
         return { executed: true };
       }
@@ -1591,9 +1591,11 @@ export class Coordinator {
         'background',
       )) as { success?: boolean; error?: string } | undefined;
 
-      // Check the content-script response for explicit failure
-      if (actionResponse && actionResponse.success === false) {
-        return { executed: false, reason: actionResponse.error || 'Content-script execution failed' };
+      // Fail closed: require explicit success===true from content script.
+      // Undefined, null, missing success field, or success===false all
+      // produce { executed: false } — never infer success from silence.
+      if (!actionResponse || actionResponse.success !== true) {
+        return { executed: false, reason: actionResponse?.error || 'Content-script execution did not confirm success' };
       }
       return { executed: true };
     } catch (e) {
