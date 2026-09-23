@@ -1240,15 +1240,7 @@ export class Coordinator {
       // Each node is classified locally using DOM fields (role, name,
       // visibleText, tag, inputType, affordances). The planner CANNOT
       // override or populate this map.
-      const targetContext = new Map<string, TargetRiskContext>();
-      for (const node of (harvestResult?.nodes || [])) {
-        if (node && node.id) {
-          const risk = classifyTargetRisk(node);
-          if (risk.isSubmit || risk.isPayment || risk.isDestructive || risk.isSend || risk.isUpload) {
-            targetContext.set(node.id, risk);
-          }
-        }
-      }
+      const targetContext = this.buildTargetContext(harvestResult?.nodes || []);
 
       const sceneContext: SceneContext = {
         nodeIds,
@@ -1654,6 +1646,30 @@ export class Coordinator {
       actionKind,
       grant.actionNonce,
     );
+  }
+
+
+  // ── P0.2b: Target context construction ─────────────────────
+
+  /**
+   * Build targetContext map from authoritative harvest nodes.
+   * Uses classifyTargetRisk() to classify each node locally.
+   * Only nodes with at least one high-risk flag are included.
+   *
+   * This method is the ONLY authority for target risk classification.
+   * The planner CANNOT populate or override this map.
+   */
+  private buildTargetContext(nodes: any[]): Map<string, TargetRiskContext> {
+    const targetContext = new Map<string, TargetRiskContext>();
+    for (const node of nodes) {
+      if (node && node.id) {
+        const risk = classifyTargetRisk(node);
+        if (risk.isSubmit || risk.isPayment || risk.isDestructive || risk.isSend || risk.isUpload) {
+          targetContext.set(node.id, risk);
+        }
+      }
+    }
+    return targetContext;
   }
 
 
