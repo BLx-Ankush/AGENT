@@ -129,6 +129,7 @@ export class Sanitizer {
     documentGeneration: string,
     origin: string,
     hints?: { label?: string; fieldName?: string; inputType?: string; fromOcr?: boolean },
+    targetNodeId?: string,
   ): string {
     // ── Layer 1: deterministic PII rules ─────────────────────
     const deterministicDetections = scanForPii(text);
@@ -179,14 +180,19 @@ export class Sanitizer {
         ? (decision.subtype ?? decision.category)
         : decision.category.toUpperCase().replace(/[^A-Z0-9]/g, '_');
 
-      // Store value in vault and get token
+      // Store value in vault and get token.
+      // targetRef: If sanitizing a node value, bind to the authoritative
+      // node ID (execution target). For task text or other contexts
+      // without a node target, use the redaction location.
+      // permittedOperation: 'type_token' — only type_token execution
+      // can redeem node-value capabilities.
       const { token } = this.vault.storeValue(
         rawValue,
         vaultCategory,
         sessionId, tabId, frameId,
         documentGeneration, origin,
-        `${context}:${decision.span.start}`,
-        'type',
+        targetNodeId || `${context}:${decision.span.start}`,
+        'type_token',
       );
 
       // Replace in text
@@ -231,12 +237,13 @@ export class Sanitizer {
       );
     }
 
-    // Sanitize visible text
+    // Sanitize visible text — bind to node.id for execution targeting
     let value = node.visibleText;
     if (value) {
       value = this.sanitizeText(
         value, `node:${node.id}:value`, redactions,
         sessionId, tabId, frameId, documentGeneration, origin,
+        undefined, node.id,
       );
     }
 

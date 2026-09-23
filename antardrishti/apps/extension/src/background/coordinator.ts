@@ -1546,6 +1546,7 @@ export class Coordinator {
           action.targetNodeId || '',
           documentGeneration,
           origin,
+          action.kind,
         );
         if ('error' in redemption) {
           const reason = `Token redemption failed: ${redemption.error}`;
@@ -1609,12 +1610,18 @@ export class Coordinator {
    * Redeem a vault token for an authorized action.
    * TOKEN REFERENCE → LOCAL VAULT → AUTHORIZED ACTION → REAL VALUE
    * (contract §12)
+   *
+   * The caller passes the ACTUAL action kind (e.g. 'type_token').
+   * The vault independently verifies that the grant's permittedOperation
+   * matches the requested operation — the Coordinator does NOT copy
+   * grant.permittedOperation back into the redeem call.
    */
   private redeemTokenForAction(
     token: string,
     targetNodeId: string,
     documentGeneration: string,
     origin: string,
+    actionKind: string,
   ): { value: string } | { error: string } {
     const grant = this.vault.getGrant(token);
     if (!grant) return { error: 'GRANT_NOT_FOUND' };
@@ -1627,10 +1634,11 @@ export class Coordinator {
       documentGeneration,
       origin,
       targetNodeId,
-      grant.permittedOperation,
+      actionKind,
       grant.actionNonce,
     );
   }
+
 
   // ── P0-A: Confirmations ─────────────────────────────────
   //
