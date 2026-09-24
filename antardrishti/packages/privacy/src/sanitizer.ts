@@ -447,6 +447,7 @@ export class Sanitizer {
     const tokenizedValue = value && value.startsWith('<SENSITIVE_') ? value : undefined;
 
     return {
+      provenance: 'PAGE_DATA' as const,  // P0.4: all scene nodes are page-derived, never authority
       id: node.id,
       role: node.role,
       name: name || undefined,

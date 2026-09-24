@@ -36,6 +36,8 @@ export interface PlannerRequestInput {
     viewport: { width: number; height: number; devicePixelRatio: number };
   };
   task: {
+    /** P0.4: always USER_TASK — user-supplied instruction */
+    provenance: 'USER_TASK';
     sanitized: string;
     risk: 'low' | 'medium' | 'high';
   };

@@ -1145,6 +1145,7 @@ export class Coordinator {
           },
         },
         task: {
+          provenance: 'USER_TASK' as const,  // P0.4: user-supplied, trusted instruction
           sanitized: sanitized.sanitizedTask,
           risk: sanitized.risk,
         },
