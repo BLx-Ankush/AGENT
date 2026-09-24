@@ -58,7 +58,8 @@ import {
   type LoadedModels,
   readBackendOverride,
 } from '@antardrishti/model-runner';
-import type { SceneNode, SensitivityFinding } from '@antardrishti/scene-graph';
+import type { SceneNode, SensitivityFinding, UnexplainedRegion } from '@antardrishti/scene-graph';
+import { reconcile, type ReconciliationResult } from '@antardrishti/visual-grounding';
 
 import {
   isOffscreenToSwMessage,
@@ -1059,21 +1060,64 @@ export class Coordinator {
         this.setPhase('idle');
         return;
       }
-      // ── Step 4: Build unified scene graph ──────────────────
-      // Merge DOM nodes with visual-only nodes from perception
+      // ── Step 4: DOM↔Visual Reconciliation + Unified scene graph ──
       const domNodes: SceneNode[] = harvestResult?.nodes || [];
-      const visualNodes: SceneNode[] = perceptionResult
+      const visualGroundings = perceptionResult?.groundings || [];
+
+      // P0.5: Run real reconciliation between visual regions and DOM nodes
+      const reconciliationResults: ReconciliationResult[] = visualGroundings.length > 0
+        ? reconcile(visualGroundings, domNodes)
+        : [];
+
+      // Merge reconciliation conflict flags into matched DOM nodes
+      for (const rr of reconciliationResults) {
+        if (rr.matchedNodeId && rr.conflicts.length > 0) {
+          const matchedNode = domNodes.find(n => n.id === rr.matchedNodeId);
+          if (matchedNode) {
+            for (const cf of rr.conflicts) {
+              if (!matchedNode.conflictFlags.includes(cf)) {
+                matchedNode.conflictFlags.push(cf);
+              }
+            }
+          }
+        }
+      }
+
+      // Build visual-only SceneNodes (unmatched visual regions)
+      const matchedVisualIds = new Set(
+        reconciliationResults.filter(r => r.matchedNodeId !== null).map(r => r.visualRegionId),
+      );
+      const visualOnlyGroundings = visualGroundings.filter(
+        g => !matchedVisualIds.has(g.visualRegionId),
+      );
+      const visualNodes: SceneNode[] = visualOnlyGroundings.length > 0 && perceptionResult
         ? this.groundingsToSceneNodes(
-            perceptionResult,
+            { ...perceptionResult, groundings: visualOnlyGroundings },
             captureResult.observationId as string,
             captureResult.stamp.documentGeneration,
           )
         : [];
 
+      // Build unexplained regions from visual-only reconciliation results
+      const unexplainedRegions: UnexplainedRegion[] = reconciliationResults
+        .filter(r => r.relation === 'visual-only' || r.relation === 'unresolved')
+        .map(r => {
+          const vg = visualGroundings.find(g => g.visualRegionId === r.visualRegionId);
+          return {
+            id: r.visualRegionId,
+            bbox: vg ? { ...vg.bbox } : { x: 0, y: 0, w: 0, h: 0 },
+            source: 'vision' as const,
+            description: `${r.relation}: ${r.notes.join('; ')}`,
+            sensitivity: [],
+          };
+        });
+
       const unifiedNodes = [...domNodes, ...visualNodes];
       console.log('[Coordinator] [4/8] Unified scene:', {
         domNodes: domNodes.length,
         visualNodes: visualNodes.length,
+        reconciled: reconciliationResults.length,
+        unexplained: unexplainedRegions.length,
         total: unifiedNodes.length,
       });
 
@@ -1089,11 +1133,21 @@ export class Coordinator {
         captureResult.stamp.topOrigin,
       );
 
-      // Update visual coverage based on perception results
-      const visualCoverage = perceptionResult && perceptionResult.groundings.length > 0
-        ? 'full' as const
+      // Update visual coverage based on perception + reconciliation
+      const visualCoverage = reconciliationResults.length > 0
+        ? (unexplainedRegions.length === 0 ? 'complete-for-task-regions' as const : 'partial' as const)
         : perceptionResult ? 'partial' as const : 'none' as const;
       sanitized.scene.coverage.visualGrounding = visualCoverage;
+
+      // P0.5: attach unexplained regions to the planner scene
+      if (unexplainedRegions.length > 0) {
+        sanitized.scene.unexplainedRegions = unexplainedRegions.map(ur => ({
+          visualRegionId: ur.id,
+          bbox: { x: ur.bbox.x, y: ur.bbox.y, width: ur.bbox.w, height: ur.bbox.h },
+          description: ur.description,
+          provenance: 'PAGE_DATA' as const,
+        }));
+      }
 
       console.log('[Coordinator] [5/8] Sanitized:', {
         redactions: sanitized.redactions.length,
