@@ -1100,7 +1100,34 @@ export class Coordinator {
         nodes: sanitized.scene.nodes.length,
         risk: sanitized.risk,
         visualCoverage,
+        blocked: sanitized.blocked,
+        localDecisions: sanitized.localDecisions?.length ?? 0,
       });
+
+      // P0.3: BLOCK — fail closed, no planner dispatch
+      if (sanitized.blocked) {
+        console.error('[Coordinator] P0.3 BLOCK: privacy policy blocked this request —', sanitized.blockReason);
+        sendResponse({
+          ack: false,
+          error: `Privacy policy blocked: ${sanitized.blockReason}`,
+          category: 'privacy-block',
+        });
+        this.setPhase('idle');
+        return;
+      }
+
+      // P0.3: ASK_LOCAL — requires local decision, no planner dispatch
+      if (sanitized.localDecisions && sanitized.localDecisions.length > 0) {
+        console.log('[Coordinator] P0.3 ASK_LOCAL: local decision required for', sanitized.localDecisions.length, 'items');
+        sendResponse({
+          ack: false,
+          error: 'Local authorization required',
+          category: 'local-decision-required',
+          localDecisions: sanitized.localDecisions,
+        });
+        this.setPhase('idle');
+        return;
+      }
 
       // ── Step 6: Build planner request ────────────────────
       const plannerRequest: PlannerRequestInput = {
