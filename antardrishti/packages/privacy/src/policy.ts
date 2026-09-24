@@ -49,6 +49,7 @@ const NEVER_TO_PLANNER = new Set([
 
 const NEVER_CATEGORIES = new Set([
   'password', 'otp', 'cvv', 'private-key',
+  'api-key', 'jwt', 'cloud-credential',
 ]);
 
 // ── Policy engine ────────────────────────────────────────────
@@ -72,8 +73,20 @@ export function evaluatePolicy(input: PolicyInput): PolicyResult {
 
   // ── Remote planner rules ───────────────────────────────
   if (recipient === 'remote-planner') {
+    // P0.3: Biometric visual data → MASK_VISUAL (mask face in image)
+    if (category === 'face') {
+      return {
+        decision: 'MASK_VISUAL',
+        reason: 'face: mask visual biometric data',
+        requiresUserConfirmation: false,
+      };
+    }
+
     // Hard never: credential, payment, biometric raw data
-    if (NEVER_TO_PLANNER.has(category)) {
+    // Also matches PII subcategories that belong to these parent groups
+    if (NEVER_TO_PLANNER.has(category) ||
+        category === 'credit-card' || category === 'iban' ||
+        category === 'ifsc' || category === 'account-number') {
       // Can tokenize if task-required
       if (taskNecessity === 'required' && confidence >= 0.7) {
         return {
@@ -105,8 +118,10 @@ export function evaluatePolicy(input: PolicyInput): PolicyResult {
       };
     }
 
-    // Financial identifiers
-    if (category === 'financial' || category === 'identity-document') {
+    // Financial / identity-document identifiers (includes PII subcategories)
+    if (category === 'financial' || category === 'identity-document' ||
+        category === 'aadhaar' || category === 'pan' ||
+        category === 'ssn' || category === 'dob') {
       return {
         decision: 'TOKENIZE',
         reason: `${category}: always tokenized for planner`,

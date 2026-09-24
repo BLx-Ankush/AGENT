@@ -287,7 +287,7 @@ test('S24: Sanitizer always produces redactions array', () => {
   assert(Array.isArray(result.protectedVisualRegions), 'protectedVisualRegions must be an array');
 });
 
-test('S25: Sanitizer tokenizes detected PII', () => {
+test('S25: Sanitizer redacts detected PII', () => {
   const vault = new TokenVault();
   const sanitizer = new Sanitizer(vault);
   const result = sanitizer.sanitize(
@@ -295,8 +295,13 @@ test('S25: Sanitizer tokenizes detected PII', () => {
     'session-1', 1, 0, 'doc-1', 'https://example.com',
   );
   assert(result.redactions.length > 0, 'Should have redactions');
-  assert(!result.sanitizedTask.includes('ravi.shankar@example.com'), 'Email should be tokenized');
-  assert(result.sanitizedTask.includes('<SENSITIVE_'), 'Should contain token');
+  assert(!result.sanitizedTask.includes('ravi.shankar@example.com'), 'Email should be redacted');
+  // P0.3: email in task text (unknown necessity) → ABSTRACT (safe abstraction)
+  // or TOKENIZE (if necessity were required). Either way, raw value is absent.
+  assert(
+    result.sanitizedTask.includes('<SENSITIVE_') || result.sanitizedTask.includes('[an email address]'),
+    'Should contain token or abstraction',
+  );
 });
 
 test('S26: Sanitizer tokenizes credit cards', () => {

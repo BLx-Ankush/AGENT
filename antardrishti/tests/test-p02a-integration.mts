@@ -122,6 +122,7 @@ function createSensitiveNode(nodeId: string, rawValue: string): SceneNode {
     visibleText: rawValue,
     bbox: { x: 100, y: 200, w: 200, h: 30 },
     affordances: ['type'],
+    necessity: 'required',  // P0.3: email in a form field the user is filling → task-required
   } as SceneNode;
 }
 
