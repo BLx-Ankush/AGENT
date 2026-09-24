@@ -52,6 +52,7 @@ import { validatePlan, checkActionFreshness, isAuthoritativeDomTarget, validateP
 import { createTargetFingerprint, verifyTargetFingerprint, type TargetFingerprint } from '@antardrishti/protocol-v2';
 import {
   PerceptionPipeline,
+  PerceptionFailureError,
   type PerceptionResult,
   type CanvasRegionData,
   loadProductionModels,
@@ -998,17 +999,47 @@ export class Coordinator {
             captureResult.height,
           );
         } catch (e) {
-          console.warn('[Coordinator] ImageData decode failed, skipping perception:', e);
+          // P0.7: Decode failure is fail-closed in production mode
+          if (!this.perception.isDevFallbackEnabled) {
+            console.error('[Coordinator] P0.7 FAIL-CLOSED: ImageData decode failed — aborting observation:', e);
+            sendResponse({
+              ack: false,
+              error: 'P0.7: perception decode failure — observation aborted',
+              category: 'perception-decode-failure',
+              failedStage: 'decode',
+              observationId: captureResult.observationId,
+            });
+            this.setPhase('idle');
+            return;
+          }
+          console.warn('[Coordinator] ImageData decode failed, DEV_FALLBACK active — skipping perception:', e);
         }
         if (imageData) {
-          perceptionResult = await this.perception.run(
-            imageData,
-            changedTileRects,
-            captureResult.observationId as string,
-            0,
-            captureResult.stamp.documentGeneration,
-            canvasCtx,
-          );
+          try {
+            perceptionResult = await this.perception.run(
+              imageData,
+              changedTileRects,
+              captureResult.observationId as string,
+              0,
+              captureResult.stamp.documentGeneration,
+              canvasCtx,
+            );
+          } catch (e) {
+            // P0.7: PerceptionFailureError from ONNX model failure — fail closed
+            if (e instanceof PerceptionFailureError) {
+              console.error(`[Coordinator] P0.7 FAIL-CLOSED: ${e.stage} failed — aborting observation:`, e.message);
+              sendResponse({
+                ack: false,
+                error: `P0.7: perception failure (${e.stage}) — observation aborted`,
+                category: 'perception-model-failure',
+                failedStage: e.stage,
+                observationId: captureResult.observationId,
+              });
+              this.setPhase('idle');
+              return;
+            }
+            throw e; // Re-throw unexpected errors to outer catch
+          }
         }
       } else {
         // Chrome offscreen path: send PNG data URL to offscreen document.
@@ -1050,7 +1081,20 @@ export class Coordinator {
           groundedTargets: perceptionResult.groundings.filter(g => g.candidateTargetId !== null).length,
         });
       } else {
-        console.log('[Coordinator] [3/8] Perception skipped (no image data)');
+        // P0.7: Null perception in production mode is fail-closed
+        if (!this.perception.isDevFallbackEnabled) {
+          console.error('[Coordinator] P0.7 FAIL-CLOSED: perception result is null — aborting observation');
+          sendResponse({
+            ack: false,
+            error: 'P0.7: mandatory perception unavailable — observation aborted',
+            category: 'perception-unavailable',
+            failedStage: 'perception-null',
+            observationId: captureResult.observationId,
+          });
+          this.setPhase('idle');
+          return;
+        }
+        console.log('[Coordinator] [3/8] Perception skipped (no image data) — DEV_FALLBACK active');
       }
 
       // P1-F stale-pipeline check: after perception await
