@@ -33,7 +33,11 @@ export const ViewportSchema = z.object({
 
 // ── Scene ────────────────────────────────────────────────────
 
+/** P0.4: Content provenance enum */
+export const ContentProvenanceSchema = z.enum(['USER_TASK', 'PAGE_DATA', 'SYSTEM_CONTROL']);
+
 export const PlannerSceneNodeSchema = z.object({
+  provenance: ContentProvenanceSchema,
   id: z.string().min(1),
   role: z.string().optional(),
   name: z.string().optional(),
@@ -67,6 +71,7 @@ export const PlannerSceneSchema = z.object({
         visualRegionId: z.string(),
         bbox: BboxSchema,
         description: z.string().optional(),
+        provenance: ContentProvenanceSchema,
       }).strict(),
     )
     .optional(),
