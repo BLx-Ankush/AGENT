@@ -49,12 +49,27 @@ export interface SanitizationResult {
   protectedVisualRegions: ProtectedVisualRegion[];
   /** Risk level */
   risk: 'low' | 'medium' | 'high';
+  /** P0.3: true when BLOCK policy was triggered — no planner request should be emitted */
+  blocked: boolean;
+  /** P0.3: reason for block (empty string if not blocked) */
+  blockReason: string;
+  /** P0.3: local-decision entries for ASK_LOCAL policy */
+  localDecisions: Array<{
+    category: string;
+    reason: string;
+    region: string;
+  }>;
 }
 
 // ── Sanitizer ────────────────────────────────────────────────
 
 export class Sanitizer {
   private vault: TokenVault;
+
+  // P0.3: per-sanitize() pass state
+  private _blocked = false;
+  private _blockReason = '';
+  private _localDecisions: Array<{ category: string; reason: string; region: string }> = [];
 
   constructor(vault: TokenVault) {
     this.vault = vault;
@@ -63,6 +78,10 @@ export class Sanitizer {
   /**
    * Sanitize a full planner request envelope.
    * Returns sanitized content + redaction declarations.
+   *
+   * P0.3: Each policy decision now produces a distinct semantic outcome.
+   * BLOCK → blocked=true, no planner request.
+   * ASK_LOCAL → localDecisions populated, value not sent.
    */
   sanitize(
     rawTask: string,
@@ -76,11 +95,30 @@ export class Sanitizer {
     const redactions: RedactionDeclaration[] = [];
     const protectedVisualRegions: ProtectedVisualRegion[] = [];
 
+    // P0.3: track blocked state and local decisions across all sanitization
+    this._blocked = false;
+    this._blockReason = '';
+    this._localDecisions = [];
+
     // 1. Sanitize task text
     const sanitizedTask = this.sanitizeText(
       rawTask, 'task', redactions, sessionId, tabId, frameId,
       documentGeneration, origin,
     );
+
+    // If blocked, short-circuit — do not continue processing nodes
+    if (this._blocked) {
+      return {
+        sanitizedTask: '',
+        scene: { nodes: [], coverage: { visualGrounding: 'none', unresolvedRegions: 0, structuredGate: 'passed', visualGate: 'not-applicable' } },
+        redactions,
+        protectedVisualRegions,
+        risk: 'high',
+        blocked: true,
+        blockReason: this._blockReason,
+        localDecisions: this._localDecisions,
+      };
+    }
 
     // 2. Sanitize scene nodes → planner-visible nodes
     const plannerNodes: PlannerSceneNode[] = [];
@@ -90,6 +128,19 @@ export class Sanitizer {
         node, redactions, protectedVisualRegions,
         sessionId, tabId, frameId, documentGeneration, origin,
       );
+      // If a node triggered BLOCK, short-circuit
+      if (this._blocked) {
+        return {
+          sanitizedTask: '',
+          scene: { nodes: [], coverage: { visualGrounding: 'none', unresolvedRegions: 0, structuredGate: 'passed', visualGate: 'not-applicable' } },
+          redactions,
+          protectedVisualRegions,
+          risk: 'high',
+          blocked: true,
+          blockReason: this._blockReason,
+          localDecisions: this._localDecisions,
+        };
+      }
       plannerNodes.push(pNode);
     }
 
@@ -114,6 +165,9 @@ export class Sanitizer {
       redactions,
       protectedVisualRegions,
       risk,
+      blocked: false,
+      blockReason: '',
+      localDecisions: this._localDecisions,
     };
   }
 
@@ -130,6 +184,7 @@ export class Sanitizer {
     origin: string,
     hints?: { label?: string; fieldName?: string; inputType?: string; fromOcr?: boolean },
     targetNodeId?: string,
+    taskNecessity: 'required' | 'helpful' | 'irrelevant' | 'unknown' = 'unknown',
   ): string {
     // ── Layer 1: deterministic PII rules ─────────────────────
     const deterministicDetections = scanForPii(text);
@@ -163,7 +218,7 @@ export class Sanitizer {
             : 'context-inferred',
           evidenceSource: decision.detectorIds.join(','),
         },
-        taskNecessity: 'unknown',
+        taskNecessity,
         recipient: 'remote-planner',
         origin,
         hasUserAuthorization: false,
@@ -173,44 +228,148 @@ export class Sanitizer {
       if (policy.decision === 'ALLOW_LITERAL') continue;
 
       const rawValue = sanitized.slice(decision.span.start, decision.span.end);
+      const region = `${context}:${decision.span.start}`;
+      const catStr = decision.subtype ?? decision.category;
 
-      // Use tokenPrefix from taxonomy for semantic detections;
-      // deterministic detections use their category directly
-      const vaultCategory = decision.source === 'deterministic'
-        ? (decision.subtype ?? decision.category)
-        : decision.category.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      // ── P0.3: Dispatch on policy decision ─────────────────
 
-      // Store value in vault and get token.
-      // targetRef: If sanitizing a node value, bind to the authoritative
-      // node ID (execution target). For task text or other contexts
-      // without a node target, use the redaction location.
-      // permittedOperation: 'type_token' — only type_token execution
-      // can redeem node-value capabilities.
-      const { token } = this.vault.storeValue(
-        rawValue,
-        vaultCategory,
-        sessionId, tabId, frameId,
-        documentGeneration, origin,
-        targetNodeId || `${context}:${decision.span.start}`,
-        'type_token',
-      );
+      switch (policy.decision) {
 
-      // Replace in text
-      sanitized =
-        sanitized.substring(0, decision.span.start) +
-        token +
-        sanitized.substring(decision.span.end);
+        // ── BLOCK: fail-closed, no planner request ──────────
+        case 'BLOCK': {
+          this._blocked = true;
+          this._blockReason = policy.reason;
+          // Do NOT tokenize, do NOT continue — sanitize() will short-circuit
+          return sanitized; // caller checks this._blocked
+        }
 
-      // Create redaction declaration
-      redactions.push({
-        token: token as string,
-        category: mapToRedactionCategory(decision.subtype ?? decision.category),
-        shape: mapToRedactionShape(decision.subtype ?? decision.category),
-        region: `${context}:${decision.span.start}`,
-        representation: 'placeholder',
-        disclosure: 'shape-only',
-        reasonCode: 'required-for-planning',
-      });
+        // ── ASK_LOCAL: local decision, no outbound value ────
+        case 'ASK_LOCAL': {
+          this._localDecisions.push({
+            category: catStr,
+            reason: policy.reason,
+            region,
+          });
+          // Replace value with local-decision marker — NOT a vault token
+          const localMarker = `[LOCAL_DECISION:${catStr}]`;
+          sanitized =
+            sanitized.substring(0, decision.span.start) +
+            localMarker +
+            sanitized.substring(decision.span.end);
+
+          redactions.push({
+            token: localMarker,
+            category: mapToRedactionCategory(catStr),
+            shape: mapToRedactionShape(catStr),
+            region,
+            representation: 'omitted',
+            disclosure: 'action-required',
+            reasonCode: 'not-required',
+          });
+          break;
+        }
+
+        // ── OMIT: remove value entirely ─────────────────────
+        case 'OMIT': {
+          const omitMarker = `[OMITTED:${mapToRedactionCategory(catStr)}]`;
+          sanitized =
+            sanitized.substring(0, decision.span.start) +
+            omitMarker +
+            sanitized.substring(decision.span.end);
+
+          redactions.push({
+            token: omitMarker,
+            category: mapToRedactionCategory(catStr),
+            shape: mapToRedactionShape(catStr),
+            region,
+            representation: 'omitted',
+            disclosure: 'category-only',
+            reasonCode: 'not-required',
+          });
+          break;
+        }
+
+        // ── ABSTRACT: safe semantic abstraction ─────────────
+        case 'ABSTRACT': {
+          const abstraction = abstractValue(catStr);
+          sanitized =
+            sanitized.substring(0, decision.span.start) +
+            abstraction +
+            sanitized.substring(decision.span.end);
+
+          redactions.push({
+            token: abstraction,
+            category: mapToRedactionCategory(catStr),
+            shape: mapToRedactionShape(catStr),
+            region,
+            representation: 'abstracted',
+            disclosure: 'shape-only',
+            reasonCode: 'required-for-planning',
+          });
+          break;
+        }
+
+        // ── MASK_VISUAL: protected visual representation ────
+        case 'MASK_VISUAL': {
+          const maskMarker = `[MASKED:${mapToRedactionCategory(catStr)}]`;
+          sanitized =
+            sanitized.substring(0, decision.span.start) +
+            maskMarker +
+            sanitized.substring(decision.span.end);
+
+          redactions.push({
+            token: maskMarker,
+            category: mapToRedactionCategory(catStr),
+            shape: mapToRedactionShape(catStr),
+            region,
+            visualRegionId: `vr-text-${region}`,
+            representation: 'masked',
+            disclosure: 'category-only',
+            reasonCode: 'not-required',
+          });
+          break;
+        }
+
+        // ── TOKENIZE: vault-backed token (existing behavior) ─
+        case 'TOKENIZE':
+        default: {
+          // Use tokenPrefix from taxonomy for semantic detections;
+          // deterministic detections use their category directly
+          const vaultCategory = decision.source === 'deterministic'
+            ? catStr
+            : decision.category.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+          // Store value in vault and get token.
+          // targetRef: bind to node ID or redaction location.
+          // permittedOperation: 'type_token'
+          const { token } = this.vault.storeValue(
+            rawValue,
+            vaultCategory,
+            sessionId, tabId, frameId,
+            documentGeneration, origin,
+            targetNodeId || region,
+            'type_token',
+          );
+
+          // Replace in text
+          sanitized =
+            sanitized.substring(0, decision.span.start) +
+            token +
+            sanitized.substring(decision.span.end);
+
+          // Create redaction declaration
+          redactions.push({
+            token: token as string,
+            category: mapToRedactionCategory(catStr),
+            shape: mapToRedactionShape(catStr),
+            region,
+            representation: 'placeholder',
+            disclosure: 'shape-only',
+            reasonCode: 'required-for-planning',
+          });
+          break;
+        }
+      }
     }
 
     return sanitized;
@@ -234,6 +393,7 @@ export class Sanitizer {
       name = this.sanitizeText(
         name, `node:${node.id}:name`, redactions,
         sessionId, tabId, frameId, documentGeneration, origin,
+        undefined, undefined, node.necessity ?? 'unknown',
       );
     }
 
@@ -243,7 +403,7 @@ export class Sanitizer {
       value = this.sanitizeText(
         value, `node:${node.id}:value`, redactions,
         sessionId, tabId, frameId, documentGeneration, origin,
-        undefined, node.id,
+        undefined, node.id, node.necessity ?? 'unknown',
       );
     }
 
@@ -348,5 +508,40 @@ function mapToRedactionShape(piiCat: string): RedactionShape {
     case 'address': return 'address';
     case 'face': return 'image';
     default: return 'text';
+  }
+}
+
+// ── P0.3: Abstraction ────────────────────────────────────────
+
+/**
+ * Generate a safe semantic abstraction for a sensitive value.
+ * Returns a deterministic human-readable label that conveys
+ * the category without exposing the actual value.
+ *
+ * Example: 'email' → '[an email address]'
+ */
+function abstractValue(category: string): string {
+  switch (category) {
+    case 'email': return '[an email address]';
+    case 'phone': return '[a phone number]';
+    case 'address': return '[a physical address]';
+    case 'contact': return '[contact information]';
+    case 'credit-card': return '[a payment card number]';
+    case 'iban': return '[a bank account number]';
+    case 'ifsc': return '[a bank code]';
+    case 'account-number': return '[an account number]';
+    case 'aadhaar': return '[an identity number]';
+    case 'pan': return '[a tax identifier]';
+    case 'ssn': return '[a government identifier]';
+    case 'dob': return '[a date of birth]';
+    case 'password': return '[a credential]';
+    case 'otp': return '[a one-time code]';
+    case 'api-key': return '[an API key]';
+    case 'jwt': return '[an authentication token]';
+    case 'private-key': return '[a private key]';
+    case 'cloud-credential': return '[a cloud credential]';
+    case 'face': return '[biometric data]';
+    case 'health': return '[health information]';
+    default: return `[${category} value]`;
   }
 }
