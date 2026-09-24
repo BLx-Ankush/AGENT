@@ -87,6 +87,23 @@ export interface CanvasRegionData {
   }>;
 }
 
+// ── ROI instrumentation ──────────────────────────────────────
+
+export interface RoiMetrics {
+  /** Full viewport pixel count */
+  fullViewportPixels: number;
+  /** Total ROI pixel count actually sent to inference */
+  roiPixels: number;
+  /** Number of ROI regions */
+  roiCount: number;
+  /** Whether full-frame fallback occurred */
+  fullFrameFallback: boolean;
+  /** Per-ROI dimensions */
+  roiDimensions: Array<{ x: number; y: number; w: number; h: number }>;
+  /** Coverage ratio (roiPixels / fullViewportPixels) */
+  coverageRatio: number;
+}
+
 // ── Pipeline result ──────────────────────────────────────────
 
 export interface PerceptionResult {
@@ -109,6 +126,8 @@ export interface PerceptionResult {
   totalMs: number;
   /** Number of tiles processed */
   tilesProcessed: number;
+  /** P0.6: ROI workload instrumentation */
+  roiMetrics: RoiMetrics;
 }
 
 // ── Pipeline triggers ────────────────────────────────────────
@@ -245,10 +264,20 @@ export class PerceptionPipeline {
     const startTime = performance.now();
     resetVisualRegionCounter();
     const allMetrics: InferenceMetrics[] = [];
+    const imgData = getImageData(imageData);
+
+    // P0.6: Compute ROI metrics
+    const fullViewportPixels = imgData.width * imgData.height;
+    const isFullFrame = this.isFullViewportTile(changedTileRects, imgData.width, imgData.height);
+    const roiPixels = changedTileRects.reduce((s, t) => s + t.w * t.h, 0);
 
     console.log('[Perception] ── Pipeline start ──', {
       observationId: observationId.substring(0, 16),
       tiles: changedTileRects.length,
+      fullFrame: isFullFrame,
+      viewportPixels: fullViewportPixels,
+      roiPixels,
+      coverageRatio: `${(roiPixels / fullViewportPixels * 100).toFixed(1)}%`,
       canvasTexts: canvasContext?.canvasTexts.length ?? 0,
       faceHints: canvasContext?.faceRegions.length ?? 0,
       controlHints: canvasContext?.controlRegions.length ?? 0,
@@ -256,27 +285,27 @@ export class PerceptionPipeline {
 
     const t0 = performance.now();
 
-    // 1. Text detection on changed tiles
+    // 1. Text detection on changed tiles (P0.6: per-ROI crop + remap)
     const textRegions = await this.detectTextRegions(
-      imageData, changedTileRects, allMetrics,
+      imgData, changedTileRects, allMetrics,
     );
     console.log('[Perception] [1/5] Text regions:', textRegions.length, `(${Math.round(performance.now() - t0)}ms)`);
 
     // 2. OCR on detected text regions (+ canvas-extracted texts)
     const ocrResults = await this.recognizeText(
-      imageData, textRegions, allMetrics, canvasContext?.canvasTexts,
+      imgData, textRegions, allMetrics, canvasContext?.canvasTexts,
     );
     console.log('[Perception] [2/5] OCR results:', ocrResults.length);
 
-    // 3. Face detection on changed tiles (+ known face regions)
+    // 3. Face detection on changed tiles (P0.6: per-ROI crop + remap)
     const faceDetections = await this.detectFaces(
-      imageData, changedTileRects, allMetrics, canvasContext?.faceRegions,
+      imgData, changedTileRects, allMetrics, canvasContext?.faceRegions,
     );
     console.log('[Perception] [3/5] Face detections:', faceDetections.length);
 
-    // 4. Semantic region parsing (UI elements, controls)
+    // 4. Semantic region parsing (P0.6: per-ROI crop + remap)
     const semanticRegions = await this.parseRegions(
-      imageData, changedTileRects, allMetrics, canvasContext?.controlRegions,
+      imgData, changedTileRects, allMetrics, canvasContext?.controlRegions,
     );
     console.log('[Perception] [4/5] Semantic regions:', semanticRegions.length);
 
@@ -294,6 +323,15 @@ export class PerceptionPipeline {
 
     const totalMs = performance.now() - startTime;
 
+    const roiMetricsData: RoiMetrics = {
+      fullViewportPixels,
+      roiPixels,
+      roiCount: changedTileRects.length,
+      fullFrameFallback: isFullFrame,
+      roiDimensions: changedTileRects.map(t => ({ x: t.x, y: t.y, w: t.w, h: t.h })),
+      coverageRatio: fullViewportPixels > 0 ? roiPixels / fullViewportPixels : 1,
+    };
+
     console.log('[Perception] ── Pipeline done ──', {
       totalMs: Math.round(totalMs),
       modelsInvoked: allMetrics.map(m => m.modelId).join(', '),
@@ -301,6 +339,7 @@ export class PerceptionPipeline {
       ocrRegions: ocrResults.length,
       faceDetections: faceDetections.length,
       groundedTargets: groundings.filter(g => g.candidateTargetId !== null).length,
+      roi: `${roiMetricsData.roiCount} ROIs, ${(roiMetricsData.coverageRatio * 100).toFixed(1)}% coverage`,
     });
 
     return {
@@ -315,7 +354,33 @@ export class PerceptionPipeline {
       metrics: allMetrics,
       totalMs,
       tilesProcessed: changedTileRects.length,
+      roiMetrics: roiMetricsData,
     };
+  }
+
+  // ── P0.6: ROI helpers ──────────────────────────────────────
+
+  /**
+   * Detect whether the tile set represents the full viewport (fallback).
+   */
+  private isFullViewportTile(
+    tiles: Array<{ x: number; y: number; w: number; h: number }>,
+    viewportW: number,
+    viewportH: number,
+  ): boolean {
+    if (tiles.length !== 1) return false;
+    const t = tiles[0];
+    return t.x === 0 && t.y === 0 && t.w === viewportW && t.h === viewportH;
+  }
+
+  /**
+   * Remap a [x,y,w,h] bbox from ROI-local coordinates to viewport coordinates.
+   */
+  private remapBbox(
+    bbox: [number, number, number, number],
+    roiOrigin: { x: number; y: number },
+  ): [number, number, number, number] {
+    return [bbox[0] + roiOrigin.x, bbox[1] + roiOrigin.y, bbox[2], bbox[3]];
   }
 
   // ── Detection stages ────────────────────────────────────────
@@ -328,17 +393,34 @@ export class PerceptionPipeline {
   //   Safe only for offline testing with no real user PII.
 
   private async detectTextRegions(
-    imageData: ImageData | OffscreenCanvas,
+    imgData: ImageData,
     tiles: Array<{ x: number; y: number; w: number; h: number }>,
     metrics: InferenceMetrics[],
   ): Promise<TextRegion[]> {
-    const imgData = getImageData(imageData);
-
-    // PRODUCTION: PP-OCRv4 DBNet via ONNX Runtime Web
+    // PRODUCTION: PP-OCRv4 DBNet via ONNX Runtime Web — P0.6: per-ROI crop + remap
     if (this.onnxTextDetector?.isInitialized) {
       try {
         const t0 = performance.now();
-        const regions = await this.onnxTextDetector.detectRegions(imgData);
+        const allRegions: TextRegion[] = [];
+        let totalProcessedPixels = 0;
+
+        for (const tile of tiles) {
+          // P0.6: Crop to tile ROI — model receives only the changed region
+          const roiData = cropImageData(imgData, tile.x, tile.y, tile.w, tile.h);
+          totalProcessedPixels += roiData.width * roiData.height;
+
+          const tileRegions = await this.onnxTextDetector.detectRegions(roiData);
+
+          // P0.6: Remap ROI-local coordinates to viewport coordinates
+          for (const region of tileRegions) {
+            region.bbox = this.remapBbox(region.bbox, tile);
+            if (region.polygon) {
+              region.polygon = region.polygon.map(([px, py]) => [px + tile.x, py + tile.y] as [number, number]);
+            }
+            allRegions.push(region);
+          }
+        }
+
         metrics.push({
           modelId: this.onnxTextDetector.manifest.id,
           backend: this.onnxTextDetector.backend,
@@ -349,13 +431,12 @@ export class PerceptionPipeline {
           preprocessMs: 0,
           postprocessMs: 0,
           totalMs: performance.now() - t0,
-          processedPixels: imgData.width * imgData.height,
+          processedPixels: totalProcessedPixels,
           timestamp: new Date().toISOString(),
         });
-        console.log(`[Perception] [ONNX] text-detector: ${regions.length} regions`);
-        return regions;
+        console.log(`[Perception] [ONNX] text-detector: ${allRegions.length} regions (${tiles.length} ROIs, ${totalProcessedPixels}px)`);
+        return allRegions;
       } catch (e) {
-        // FAIL-CLOSED: re-throw as PerceptionFailureError unless dev fallback is explicitly enabled
         if (!this.devFallbackEnabled) {
           throw new PerceptionFailureError('text-detection', e);
         }
@@ -374,6 +455,7 @@ export class PerceptionPipeline {
     // DEV_FALLBACK path — only reached if devFallbackEnabled=true
     const t0 = performance.now();
     const regions = devFallback_detectTextRegions(imgData, tiles);
+    const processedPixels = tiles.reduce((s, t) => s + t.w * t.h, 0);
     metrics.push({
       modelId: 'DEV_FALLBACK_text-detector',
       backend: 'wasm',
@@ -384,19 +466,18 @@ export class PerceptionPipeline {
       preprocessMs: 0,
       postprocessMs: 0,
       totalMs: performance.now() - t0,
-      processedPixels: imgData.width * imgData.height,
+      processedPixels,
       timestamp: new Date().toISOString(),
     });
     return regions;
   }
 
   private async recognizeText(
-    imageData: ImageData | OffscreenCanvas,
+    imgData: ImageData,
     regions: TextRegion[],
     metrics: InferenceMetrics[],
     canvasTexts?: Array<{ text: string; bbox: [number, number, number, number] }>,
   ): Promise<OcrResult[]> {
-    const imgData = getImageData(imageData);
 
     // PRODUCTION: PP-OCRv4 rec via ONNX Runtime Web
     if (this.onnxOcrRecognizer?.isInitialized && regions.length > 0) {
@@ -479,24 +560,38 @@ export class PerceptionPipeline {
   }
 
   private async detectFaces(
-    imageData: ImageData | OffscreenCanvas,
+    imgData: ImageData,
     tiles: Array<{ x: number; y: number; w: number; h: number }>,
     metrics: InferenceMetrics[],
     knownFaceRegions?: Array<{ bbox: [number, number, number, number]; confidence: number }>,
   ): Promise<FaceDetection[]> {
-    const imgData = getImageData(imageData);
-
-    // PRODUCTION: BlazeFace via ONNX Runtime Web
+    // PRODUCTION: BlazeFace via ONNX Runtime Web — P0.6: per-ROI crop + remap
     if (this.onnxFaceDetector?.isInitialized) {
       try {
         const t0 = performance.now();
-        const detections = await this.onnxFaceDetector.detectFaces(imgData);
+        const allDetections: FaceDetection[] = [];
+        let totalProcessedPixels = 0;
 
+        for (const tile of tiles) {
+          // P0.6: Crop to tile ROI
+          const roiData = cropImageData(imgData, tile.x, tile.y, tile.w, tile.h);
+          totalProcessedPixels += roiData.width * roiData.height;
+
+          const tileDetections = await this.onnxFaceDetector.detectFaces(roiData);
+
+          // P0.6: Remap ROI-local coordinates to viewport coordinates
+          for (const det of tileDetections) {
+            det.bbox = this.remapBbox(det.bbox, tile);
+            allDetections.push(det);
+          }
+        }
+
+        // Known face regions (canvas API) are already in viewport coords
         if (knownFaceRegions) {
           for (const kr of knownFaceRegions) {
             const [, , w, h] = kr.bbox;
             const area = w * h;
-            detections.push({
+            allDetections.push({
               bbox: kr.bbox,
               confidence: kr.confidence,
               sizeCategory: area < 1600 ? 'tiny' : area < 6400 ? 'small' : area < 25000 ? 'medium' : 'large',
@@ -514,11 +609,11 @@ export class PerceptionPipeline {
           preprocessMs: 0,
           postprocessMs: 0,
           totalMs: performance.now() - t0,
-          processedPixels: imgData.width * imgData.height,
+          processedPixels: totalProcessedPixels,
           timestamp: new Date().toISOString(),
         });
-        console.log(`[Perception] [ONNX] face-detector: ${detections.length} detections`);
-        return detections;
+        console.log(`[Perception] [ONNX] face-detector: ${allDetections.length} detections (${tiles.length} ROIs, ${totalProcessedPixels}px)`);
+        return allDetections;
       } catch (e) {
         if (!this.devFallbackEnabled) {
           throw new PerceptionFailureError('face-detection', e);
@@ -537,6 +632,7 @@ export class PerceptionPipeline {
     // DEV_FALLBACK path
     const t0 = performance.now();
     const detections = devFallback_detectFacesFromImage(imgData, tiles, knownFaceRegions);
+    const processedPixels = tiles.reduce((s, t) => s + t.w * t.h, 0);
     metrics.push({
       modelId: 'DEV_FALLBACK_face-detector',
       backend: 'wasm',
@@ -547,14 +643,14 @@ export class PerceptionPipeline {
       preprocessMs: 0,
       postprocessMs: 0,
       totalMs: performance.now() - t0,
-      processedPixels: imgData.width * imgData.height,
+      processedPixels,
       timestamp: new Date().toISOString(),
     });
     return detections;
   }
 
   private async parseRegions(
-    imageData: ImageData | OffscreenCanvas,
+    imgData: ImageData,
     tiles: Array<{ x: number; y: number; w: number; h: number }>,
     metrics: InferenceMetrics[],
     knownCanvasRegions?: Array<{
@@ -565,17 +661,31 @@ export class PerceptionPipeline {
       evidence: string;
     }>,
   ): Promise<SemanticRegion[]> {
-    const imgData = getImageData(imageData);
-
-    // PRODUCTION: OmniParser icon_detect via ONNX Runtime Web
+    // PRODUCTION: OmniParser icon_detect via ONNX Runtime Web — P0.6: per-ROI crop + remap
     if (this.onnxRegionParser?.isInitialized) {
       try {
         const t0 = performance.now();
-        const regions = await this.onnxRegionParser.parseRegions(imgData);
+        const allRegions: SemanticRegion[] = [];
+        let totalProcessedPixels = 0;
 
+        for (const tile of tiles) {
+          // P0.6: Crop to tile ROI
+          const roiData = cropImageData(imgData, tile.x, tile.y, tile.w, tile.h);
+          totalProcessedPixels += roiData.width * roiData.height;
+
+          const tileRegions = await this.onnxRegionParser.parseRegions(roiData);
+
+          // P0.6: Remap ROI-local coordinates to viewport coordinates
+          for (const region of tileRegions) {
+            region.bbox = this.remapBbox(region.bbox, tile);
+            allRegions.push(region);
+          }
+        }
+
+        // Known canvas regions are already in viewport coords
         if (knownCanvasRegions) {
           for (const kr of knownCanvasRegions) {
-            regions.push({
+            allRegions.push({
               bbox: kr.bbox,
               class: kr.class,
               label: kr.label,
@@ -595,11 +705,11 @@ export class PerceptionPipeline {
           preprocessMs: 0,
           postprocessMs: 0,
           totalMs: performance.now() - t0,
-          processedPixels: imgData.width * imgData.height,
+          processedPixels: totalProcessedPixels,
           timestamp: new Date().toISOString(),
         });
-        console.log(`[Perception] [ONNX] region-parser (OmniParser): ${regions.length} regions`);
-        return regions;
+        console.log(`[Perception] [ONNX] region-parser (OmniParser): ${allRegions.length} regions (${tiles.length} ROIs, ${totalProcessedPixels}px)`);
+        return allRegions;
       } catch (e) {
         if (!this.devFallbackEnabled) {
           throw new PerceptionFailureError('region-parsing', e);
@@ -618,6 +728,7 @@ export class PerceptionPipeline {
     // DEV_FALLBACK path
     const t0 = performance.now();
     const regions = devFallback_parseSemanticRegionsFromImage(imgData, tiles, knownCanvasRegions);
+    const processedPixels = tiles.reduce((s, t) => s + t.w * t.h, 0);
     metrics.push({
       modelId: 'DEV_FALLBACK_region-parser',
       backend: 'wasm',
@@ -628,7 +739,7 @@ export class PerceptionPipeline {
       preprocessMs: 0,
       postprocessMs: 0,
       totalMs: performance.now() - t0,
-      processedPixels: imgData.width * imgData.height,
+      processedPixels,
       timestamp: new Date().toISOString(),
     });
     return regions;
