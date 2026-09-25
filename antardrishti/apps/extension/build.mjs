@@ -188,6 +188,23 @@ async function build() {
     if (existsSync(src)) copyFileSync(src, join(distDir, f));
   }
 
+  // 6d. Build + copy benchmark page (evaluation-only — not production)
+  const benchmarkTs = join(__dirname, 'benchmark.ts');
+  const benchmarkHtml = join(__dirname, 'benchmark.html');
+  if (existsSync(benchmarkTs)) {
+    await esbuild.build({
+      ...commonOptions,
+      entryPoints: [benchmarkTs],
+      outfile: join(distDir, 'benchmark.js'),
+      format: 'iife',
+      // No ortMv3Plugin needed — benchmark runs in extension page context, not SW
+    });
+    if (existsSync(benchmarkHtml)) {
+      copyFileSync(benchmarkHtml, join(distDir, 'benchmark.html'));
+    }
+    console.log('  → Built benchmark page');
+  }
+
   // 7. Copy ONNX model assets → dist/{target}/models/
 
   // Models are accessed by the service worker at chrome-extension://<id>/models/*.onnx

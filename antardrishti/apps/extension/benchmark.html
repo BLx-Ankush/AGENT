@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANTARDRISHTI — Model Benchmark</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+    h1 { color: #58a6ff; margin-bottom: 4px; font-size: 1.4em; }
+    .subtitle { color: #8b949e; font-size: 0.85em; margin-bottom: 16px; }
+    #status { padding: 12px; border-radius: 6px; margin-bottom: 12px; font-weight: 600; }
+    .running { background: #1c3a5e; color: #79c0ff; }
+    .done { background: #1b3d2e; color: #56d364; }
+    .error { background: #3d1b1b; color: #f85149; }
+    .model-result { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+    .model-result h3 { color: #58a6ff; font-size: 1em; margin-bottom: 6px; }
+    .metric { display: inline-block; margin-right: 16px; font-size: 0.85em; }
+    .metric .label { color: #8b949e; }
+    .metric .value { color: #f0f6fc; font-weight: 600; }
+    #results-json { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 0.75em; max-height: 300px; overflow: auto; white-space: pre; margin-top: 12px; color: #8b949e; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.85em; }
+    th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #30363d; }
+    th { color: #58a6ff; font-weight: 600; }
+    td { color: #c9d1d9; }
+  </style>
+</head>
+<body>
+  <h1>🔬 ANTARDRISHTI Model Benchmark</h1>
+  <p class="subtitle">Chrome MV3 • ONNX Runtime Web • Live Inference</p>
+
+  <div id="status" class="running">Initializing...</div>
+  <div id="model-results"></div>
+
+  <h2 style="color:#58a6ff; margin-top:16px; font-size:1.1em;">Summary</h2>
+  <table id="summary-table">
+    <thead>
+      <tr><th>Task</th><th>Model</th><th>Backend</th><th>Cold Load</th><th>p50</th><th>p95</th><th>Min</th><th>Max</th><th>Size</th><th>Status</th></tr>
+    </thead>
+    <tbody id="summary-body"></tbody>
+  </table>
+
+  <h2 style="color:#58a6ff; margin-top:16px; font-size:1.1em;">Raw JSON</h2>
+  <pre id="results-json">Waiting...</pre>
+
+  <script src="benchmark.js"></script>
+</body>
+</html>

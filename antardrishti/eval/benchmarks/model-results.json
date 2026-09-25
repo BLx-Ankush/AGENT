@@ -2,7 +2,7 @@
   "version": "1.0",
   "commit": "HEAD",
   "runtime": "Node.js/v24.11.0",
-  "timestamp": "2026-09-25T17:05:41.519Z",
+  "timestamp": "2026-09-25T17:37:49.604Z",
   "results": [
     {
       "modelId": "text-detector-v1",
@@ -12,13 +12,13 @@
       "modelSizeBytes": 4745517,
       "loadTimeMs": 0,
       "inferenceTimesMs": [
-        5.515920163288042,
-        5.251719885859952,
-        6.8091420492085994
+        7.334000997257453,
+        4.682657600457166,
+        1.6580208834237677
       ],
-      "p50Ms": 5.515920163288042,
-      "p95Ms": 6.8091420492085994,
-      "avgMs": 5.858927366118865,
+      "p50Ms": 4.682657600457166,
+      "p95Ms": 7.334000997257453,
+      "avgMs": 4.558226493712795,
       "precision": "NOT_MEASURED",
       "recall": "NOT_MEASURED",
       "f1": "NOT_MEASURED",
@@ -27,7 +27,7 @@
       "runCount": 3,
       "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
       "fixtureVersion": "synthetic-v1",
-      "timestamp": "2026-09-25T17:05:41.517Z"
+      "timestamp": "2026-09-25T17:37:49.602Z"
     },
     {
       "modelId": "ocr-recognizer-v1",
@@ -37,13 +37,13 @@
       "modelSizeBytes": 10822323,
       "loadTimeMs": 0,
       "inferenceTimesMs": [
-        6.93975588854715,
-        2.3187052937111297,
-        5.989877671204821
+        6.821568796360529,
+        3.6608380759363914,
+        4.420708805928685
       ],
-      "p50Ms": 5.989877671204821,
-      "p95Ms": 6.93975588854715,
-      "avgMs": 5.082779617821034,
+      "p50Ms": 4.420708805928685,
+      "p95Ms": 6.821568796360529,
+      "avgMs": 4.967705226075202,
       "precision": "NOT_MEASURED",
       "recall": "NOT_MEASURED",
       "f1": "NOT_MEASURED",
@@ -52,7 +52,7 @@
       "runCount": 3,
       "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
       "fixtureVersion": "synthetic-v1",
-      "timestamp": "2026-09-25T17:05:41.518Z"
+      "timestamp": "2026-09-25T17:37:49.603Z"
     },
     {
       "modelId": "face-detector-v1",
@@ -62,13 +62,13 @@
       "modelSizeBytes": 535842,
       "loadTimeMs": 0,
       "inferenceTimesMs": [
-        5.735289994986312,
-        1.032510786869051,
-        8.055116656419441
+        3.368467073794207,
+        1.6615572975653228,
+        9.837866552378918
       ],
-      "p50Ms": 5.735289994986312,
-      "p95Ms": 8.055116656419441,
-      "avgMs": 4.940972479424935,
+      "p50Ms": 3.368467073794207,
+      "p95Ms": 9.837866552378918,
+      "avgMs": 4.955963641246149,
       "precision": "NOT_MEASURED",
       "recall": "NOT_MEASURED",
       "f1": "NOT_MEASURED",
@@ -77,7 +77,7 @@
       "runCount": 3,
       "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
       "fixtureVersion": "synthetic-v1",
-      "timestamp": "2026-09-25T17:05:41.518Z"
+      "timestamp": "2026-09-25T17:37:49.603Z"
     },
     {
       "modelId": "ui-region-detector-v1",
@@ -87,13 +87,13 @@
       "modelSizeBytes": 12136163,
       "loadTimeMs": 0,
       "inferenceTimesMs": [
-        8.603449183167573,
-        5.508656288131356,
-        4.680976554567632
+        5.913834999814891,
+        3.4055071285769802,
+        1.212595784952394
       ],
-      "p50Ms": 5.508656288131356,
-      "p95Ms": 8.603449183167573,
-      "avgMs": 6.264360675288853,
+      "p50Ms": 3.4055071285769802,
+      "p95Ms": 5.913834999814891,
+      "avgMs": 3.510645971114755,
       "precision": "NOT_MEASURED",
       "recall": "NOT_MEASURED",
       "f1": "NOT_MEASURED",
@@ -102,7 +102,7 @@
       "runCount": 3,
       "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
       "fixtureVersion": "synthetic-v1",
-      "timestamp": "2026-09-25T17:05:41.518Z"
+      "timestamp": "2026-09-25T17:37:49.603Z"
     }
   ]
 }
