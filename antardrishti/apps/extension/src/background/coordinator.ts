@@ -40,6 +40,7 @@ import {
 
 import { TokenVault } from '@antardrishti/privacy';
 import { Sanitizer } from '@antardrishti/privacy';
+import { redactImageData, type RedactionRegion } from '@antardrishti/privacy';
 import { EgressVerifier } from '@antardrishti/egress-verifier';
 import {
   DeterministicPlanner,
@@ -996,10 +997,11 @@ export class Coordinator {
       };
 
       let perceptionResult: PerceptionResult | null = null;
+      // P0.10: imageData hoisted so visual redaction step can access it after sanitization
+      let imageData: ImageData | null = null;
 
       if (this._loadedModels) {
         // Firefox direct path: pipeline runs in-process
-        let imageData: ImageData | null = null;
         try {
           imageData = await this.dataUrlToImageData(
             captureResult.imageDataUrl,
@@ -1233,6 +1235,56 @@ export class Coordinator {
         });
         this.setPhase('idle');
         return;
+      }
+      // ── Step 5b: P0.10 — Visual redaction ──────────────────
+      // If MASK_VISUAL produced protectedVisualRegions, apply actual
+      // pixel redaction to the local imageData BEFORE any egress path.
+      // The redacted imageData replaces the raw version for all downstream use.
+      let visualRedactionMetrics: {
+        totalPixels: number;
+        protectedPixels: number;
+        redactedPixels: number;
+        regionCount: number;
+        coveragePercent: number;
+      } | null = null;
+
+      if (sanitized.protectedVisualRegions.length > 0 && imageData) {
+        // Transform ProtectedVisualRegion {x,y,width,height} → RedactionRegion [x,y,w,h]
+        const redactionRegions: RedactionRegion[] = sanitized.protectedVisualRegions.map((pvr, idx) => ({
+          bbox: [pvr.bbox.x, pvr.bbox.y, pvr.bbox.width, pvr.bbox.height] as [number, number, number, number],
+          tokenId: pvr.visualRegionId || `MASK_${String(idx + 1).padStart(2, '0')}`,
+          category: (pvr.category === 'biometric' ? 'biometric'
+            : pvr.category === 'credential' ? 'credential'
+            : pvr.category === 'account' ? 'account'
+            : 'text-pii') as RedactionRegion['category'],
+        }));
+
+        const { redacted, result } = redactImageData(imageData, redactionRegions);
+
+        // Replace local imageData with the redacted version
+        imageData = redacted;
+
+        // Compute metrics
+        const totalPixels = redacted.width * redacted.height;
+        let protectedPixels = 0;
+        for (const pvr of sanitized.protectedVisualRegions) {
+          const rw = Math.min(pvr.bbox.width, redacted.width - pvr.bbox.x);
+          const rh = Math.min(pvr.bbox.height, redacted.height - pvr.bbox.y);
+          protectedPixels += Math.max(0, rw) * Math.max(0, rh);
+        }
+
+        visualRedactionMetrics = {
+          totalPixels,
+          protectedPixels,
+          redactedPixels: protectedPixels, // redactImageData covers the full region
+          regionCount: redactionRegions.length,
+          coveragePercent: totalPixels > 0 ? (protectedPixels / totalPixels) * 100 : 0,
+        };
+
+        console.log('[Coordinator] [5b/8] P0.10 Visual redaction applied:', {
+          regions: result.redactedCount,
+          ...visualRedactionMetrics,
+        });
       }
 
       // ── Step 6: Build planner request ────────────────────
