@@ -1236,7 +1236,7 @@ export class Coordinator {
       }
 
       // ── Step 6: Build planner request ────────────────────
-      const plannerRequest: PlannerRequestInput = {
+      let plannerRequest: PlannerRequestInput = {
         protocolVersion: '2.0',
         session: {
           id: this.state.sessionId!,
@@ -1268,28 +1268,95 @@ export class Coordinator {
       // Raw imageData, ocrResults, faceDetections are local-only
       // Only sanitized tokens and scene graph enter the egress verifier.
 
-      // ── Step 7: Egress verification ──────────────────────
+      // ── Step 7: Egress verification with bounded remediation ──
       this.setPhase('verifying');
-      const verification = await this.verifier.verify(
-        plannerRequest,
-        this.state.plannerUrl || DEFAULT_PLANNER_URL,
-      );
+      const plannerDestination = this.state.plannerUrl || DEFAULT_PLANNER_URL;
+      let remediationAttempts = 0;
+
+      // P0.9: Categories where local remediation can help
+      const REMEDIABLE_CATEGORIES = new Set(['pii-leak', 'canary', 'dangerous-content', 'forbidden-field']);
+
+      let verification = await this.verifier.verify(plannerRequest, plannerDestination);
 
       if (!verification.approved) {
-        const block = verification as { reason: string; category: string };
-        console.error('[Coordinator] [7/8] EGRESS BLOCKED:', block.reason);
-        sendResponse({
-          ack: false,
-          error: `Egress blocked: ${block.reason}`,
+        const block = verification as { reason: string; category: string; details?: string };
+        console.warn('[Coordinator] [7/8] EGRESS BLOCKED (attempt 0):', {
+          reason: block.reason,
           category: block.category,
+          details: block.details,
         });
-        this.setPhase('idle');
-        return;
+
+        // P0.9: Attempt bounded remediation (exactly once)
+        if (REMEDIABLE_CATEGORIES.has(block.category) && remediationAttempts === 0) {
+          remediationAttempts = 1;
+          console.log('[Coordinator] P0.9: Attempting local egress remediation (attempt 1/1)');
+
+          // Remediate: tighten all existing redactions to 'omitted' representation
+          // and re-sanitize scene node values that might contain leaked content
+          const remediatedScene = JSON.parse(JSON.stringify(sanitized.scene));
+          const remediatedRedactions = sanitized.redactions.map(r => ({
+            ...r,
+            representation: 'omitted' as const,
+            disclosure: 'none' as const,
+          }));
+
+          // Strip node values/names that might contain leaked PII
+          for (const node of remediatedScene.nodes) {
+            if (node.value) node.value = '';
+            if (node.description) node.description = '';
+          }
+
+          // Build a NEW planner request — never mutate the blocked original
+          const remediatedRequest: PlannerRequestInput = {
+            protocolVersion: '2.0',
+            session: plannerRequest.session,
+            task: plannerRequest.task,
+            scene: remediatedScene,
+            redactions: remediatedRedactions,
+            protectedVisualRegions: plannerRequest.protectedVisualRegions,
+            allowedActions: plannerRequest.allowedActions,
+          };
+
+          console.log('[Coordinator] P0.9: Re-verifying remediated payload');
+          verification = await this.verifier.verify(remediatedRequest, plannerDestination);
+
+          if (verification.approved) {
+            // Use the remediated request for planner dispatch
+            plannerRequest = remediatedRequest;
+            console.log('[Coordinator] P0.9: Remediation successful — using remediated payload');
+          } else {
+            const block2 = verification as { reason: string; category: string };
+            console.error('[Coordinator] P0.9 FAIL-CLOSED: Remediation failed — second verification rejected:', {
+              reason: block2.reason,
+              category: block2.category,
+              remediationAttempts,
+            });
+            sendResponse({
+              ack: false,
+              error: `P0.9: egress remediation failed — ${block2.reason}`,
+              category: 'egress-remediation-failed',
+              remediationAttempts,
+            });
+            this.setPhase('idle');
+            return;
+          }
+        } else {
+          // Non-remediable block (schema, destination, size, etc.) — fail closed immediately
+          console.error('[Coordinator] [7/8] EGRESS BLOCKED (non-remediable):', block.reason);
+          sendResponse({
+            ack: false,
+            error: `Egress blocked: ${block.reason}`,
+            category: block.category,
+          });
+          this.setPhase('idle');
+          return;
+        }
       }
 
       console.log('[Coordinator] [7/8] Egress approved:', {
         sealSize: (verification as any).serializedSize,
         bodyHash: (verification as any).bodyHash?.substring(0, 16) + '…',
+        remediationAttempts,
       });
 
       // P1-F stale-pipeline check: after egress verification await
