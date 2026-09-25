@@ -100,6 +100,14 @@ const CONFIRMATION_TIMEOUT_MS = 60_000;
 const TRUSTED_UI_PATHS = ['/popup.html'];
 const TRUSTED_OFFSCREEN_PATH = '/offscreen.html';
 
+/**
+ * P0.8: Canonical production planner endpoint.
+ * Matches the planner server route: POST /v1/plan
+ * This is the single source of truth for the default planner URL.
+ * Override via chrome.storage.local { plannerMode: 'server', plannerUrl: '...' }.
+ */
+const DEFAULT_PLANNER_URL = 'http://localhost:8000/v1/plan';
+
 // ── State ────────────────────────────────────────────────────
 
 interface CoordinatorState {
@@ -1264,7 +1272,7 @@ export class Coordinator {
       this.setPhase('verifying');
       const verification = await this.verifier.verify(
         plannerRequest,
-        this.state.plannerUrl || 'http://localhost:8000/plan',
+        this.state.plannerUrl || DEFAULT_PLANNER_URL,
       );
 
       if (!verification.approved) {
