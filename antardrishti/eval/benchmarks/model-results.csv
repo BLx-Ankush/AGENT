@@ -1,0 +1,5 @@
+modelId,adapterId,task,backend,modelSizeBytes,loadTimeMs,p50Ms,p95Ms,avgMs,precision,recall,f1,localizationIoU,memory,runCount,backend_runtime,fixtureVersion,timestamp
+text-detector-v1,OnnxTextDetectorSession,text-detection,wasm,4745517,0.00,5.52,6.81,5.86,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,3,"Node.js/v24.11.0 (no ONNX runtime)",synthetic-v1,2026-09-25T17:05:41.517Z
+ocr-recognizer-v1,OnnxOcrSession,ocr-recognition,wasm,10822323,0.00,5.99,6.94,5.08,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,3,"Node.js/v24.11.0 (no ONNX runtime)",synthetic-v1,2026-09-25T17:05:41.518Z
+face-detector-v1,OnnxFaceDetectorSession,face-detection,wasm,535842,0.00,5.74,8.06,4.94,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,3,"Node.js/v24.11.0 (no ONNX runtime)",synthetic-v1,2026-09-25T17:05:41.518Z
+ui-region-detector-v1,OnnxRegionParserSession,region-parsing,wasm,12136163,0.00,5.51,8.60,6.26,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,NOT_MEASURED,3,"Node.js/v24.11.0 (no ONNX runtime)",synthetic-v1,2026-09-25T17:05:41.518Z

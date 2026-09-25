@@ -1,0 +1,108 @@
+{
+  "version": "1.0",
+  "commit": "HEAD",
+  "runtime": "Node.js/v24.11.0",
+  "timestamp": "2026-09-25T17:05:41.519Z",
+  "results": [
+    {
+      "modelId": "text-detector-v1",
+      "adapterId": "OnnxTextDetectorSession",
+      "task": "text-detection",
+      "backend": "wasm",
+      "modelSizeBytes": 4745517,
+      "loadTimeMs": 0,
+      "inferenceTimesMs": [
+        5.515920163288042,
+        5.251719885859952,
+        6.8091420492085994
+      ],
+      "p50Ms": 5.515920163288042,
+      "p95Ms": 6.8091420492085994,
+      "avgMs": 5.858927366118865,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "localizationIoU": "NOT_MEASURED",
+      "memory": "NOT_MEASURED",
+      "runCount": 3,
+      "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-25T17:05:41.517Z"
+    },
+    {
+      "modelId": "ocr-recognizer-v1",
+      "adapterId": "OnnxOcrSession",
+      "task": "ocr-recognition",
+      "backend": "wasm",
+      "modelSizeBytes": 10822323,
+      "loadTimeMs": 0,
+      "inferenceTimesMs": [
+        6.93975588854715,
+        2.3187052937111297,
+        5.989877671204821
+      ],
+      "p50Ms": 5.989877671204821,
+      "p95Ms": 6.93975588854715,
+      "avgMs": 5.082779617821034,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "localizationIoU": "NOT_MEASURED",
+      "memory": "NOT_MEASURED",
+      "runCount": 3,
+      "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-25T17:05:41.518Z"
+    },
+    {
+      "modelId": "face-detector-v1",
+      "adapterId": "OnnxFaceDetectorSession",
+      "task": "face-detection",
+      "backend": "wasm",
+      "modelSizeBytes": 535842,
+      "loadTimeMs": 0,
+      "inferenceTimesMs": [
+        5.735289994986312,
+        1.032510786869051,
+        8.055116656419441
+      ],
+      "p50Ms": 5.735289994986312,
+      "p95Ms": 8.055116656419441,
+      "avgMs": 4.940972479424935,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "localizationIoU": "NOT_MEASURED",
+      "memory": "NOT_MEASURED",
+      "runCount": 3,
+      "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-25T17:05:41.518Z"
+    },
+    {
+      "modelId": "ui-region-detector-v1",
+      "adapterId": "OnnxRegionParserSession",
+      "task": "region-parsing",
+      "backend": "wasm",
+      "modelSizeBytes": 12136163,
+      "loadTimeMs": 0,
+      "inferenceTimesMs": [
+        8.603449183167573,
+        5.508656288131356,
+        4.680976554567632
+      ],
+      "p50Ms": 5.508656288131356,
+      "p95Ms": 8.603449183167573,
+      "avgMs": 6.264360675288853,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "localizationIoU": "NOT_MEASURED",
+      "memory": "NOT_MEASURED",
+      "runCount": 3,
+      "backend_runtime": "Node.js/v24.11.0 (no ONNX runtime)",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-25T17:05:41.518Z"
+    }
+  ]
+}
