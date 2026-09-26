@@ -77,11 +77,9 @@ function sendReady(): void {
 
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   if (!isSwToOffscreenMessage(message)) {
-    // Unknown message type -- log but do not crash
-    const t = (message as any)?.type;
-    if (t !== undefined) {
-      console.warn('[InferenceRuntime] Ignored unknown message type:', t);
-    }
+    // Not for this component — silently ignore.
+    // chrome.runtime.onMessage is a broadcast; other components
+    // (popup, content script, service worker) handle their own types.
     return false;
   }
 

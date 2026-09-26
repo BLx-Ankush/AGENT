@@ -137,7 +137,7 @@ export class EgressVerifier {
     }
 
     // Step 7: Re-scan ALL strings for PII/secret patterns
-    const leakCheck = this.scanForLeaks(serialized);
+    const leakCheck = this.scanForLeaks(serialized, payload);
     if (leakCheck) return leakCheck;
 
     // Step 8: Known-secret canary scan
@@ -210,19 +210,69 @@ export class EgressVerifier {
   }
 
   /**
-   * Re-scan ALL strings in the serialized payload for PII/secret patterns.
+   * Extract planner-visible semantic strings from the validated payload.
+   * These are the fields where real PII could leak to the planner.
+   *
+   * Excluded (structural metadata — not semantic text):
+   *   session IDs, observation IDs, document-generation IDs,
+   *   node IDs, bbox coordinates, viewport dimensions,
+   *   protocol versions, action allowlists, timestamps.
+   */
+  private extractSemanticStrings(payload: unknown): string[] {
+    const strings: string[] = [];
+    const p = payload as any;
+
+    // Task text — the user's sanitized instruction
+    if (p?.task?.sanitized) strings.push(p.task.sanitized);
+
+    // Scene node names and values — planner-visible page content
+    if (Array.isArray(p?.scene?.nodes)) {
+      for (const node of p.scene.nodes) {
+        if (node.name) strings.push(node.name);
+        if (node.value) strings.push(node.value);
+      }
+    }
+
+    // Unexplained region descriptions — planner-visible perception text
+    if (Array.isArray(p?.scene?.unexplainedRegions)) {
+      for (const region of p.scene.unexplainedRegions) {
+        if (region.description) strings.push(region.description);
+      }
+    }
+
+    // Redaction tokens — only the token strings (should be <SENSITIVE_...>)
+    if (Array.isArray(p?.redactions)) {
+      for (const r of p.redactions) {
+        if (r.token) strings.push(r.token);
+        if (r.region) strings.push(r.region);
+      }
+    }
+
+    return strings;
+  }
+
+  /**
+   * Re-scan planner-visible semantic strings for PII/secret patterns.
    * This is independent of the sanitizer — it doesn't trust that
    * the sanitizer caught everything.
+   *
+   * Field-aware: only semantic text is scanned — structural metadata
+   * (IDs, bbox, viewport, timestamps) is excluded.
    */
-  private scanForLeaks(serialized: string): VerificationBlock | null {
-    const detections = scanForPii(serialized);
+  private scanForLeaks(serialized: string, payload: unknown): VerificationBlock | null {
+    const semanticStrings = this.extractSemanticStrings(payload);
+    const semanticText = semanticStrings.join('\n');
+
+    if (semanticText.length === 0) return null;
+
+    const detections = scanForPii(semanticText);
 
     // Filter out detections that are within token placeholders
     const realLeaks = detections.filter(d => {
       // Tokens look like <SENSITIVE_XXXX> — these are expected
-      const around = serialized.substring(
+      const around = semanticText.substring(
         Math.max(0, d.startOffset - 15),
-        Math.min(serialized.length, d.endOffset + 2),
+        Math.min(semanticText.length, d.endOffset + 2),
       );
       return !/<SENSITIVE_[A-Z0-9]+>/.test(around);
     });
