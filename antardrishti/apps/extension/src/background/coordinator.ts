@@ -84,6 +84,9 @@ const STATE_CHANGING_ACTIONS = new Set([
   'click', 'type_text', 'type_token', 'select', 'submit',
 ]);
 
+// ── Multi-step continuation limit ───────────────────────────
+const MAX_TASK_CONTINUATIONS = 10;
+
 // ── Execution result type ────────────────────────────────────
 
 /** Explicit execution outcome — never infer success from void. */
@@ -121,6 +124,10 @@ interface CoordinatorState {
   step: number;
   plannerMode: 'deterministic' | 'server';
   plannerUrl: string | null;
+  /** Raw user task text preserved across continuations */
+  activeTaskRaw: string | null;
+  /** Number of continuation cycles completed for the current task */
+  continuationCount: number;
 }
 
 const INITIAL_STATE: CoordinatorState = {
@@ -132,6 +139,8 @@ const INITIAL_STATE: CoordinatorState = {
   step: 0,
   plannerMode: 'deterministic',
   plannerUrl: null,
+  activeTaskRaw: null,
+  continuationCount: 0,
 };
 
 /**
@@ -174,6 +183,10 @@ export class Coordinator {
    * Cleared on session end (new session starts fresh).
    */
   _invalidatedObservationIds: Set<string> = new Set();
+
+  // -- Multi-step continuation guard --
+  /** Prevents duplicate continuation scheduling */
+  private _continuationScheduled = false;
 
   // -- Offscreen inference state ------------------------------------------
   /**
@@ -865,8 +878,17 @@ export class Coordinator {
   private async handleUserTask(
     payload: UserTaskPayload,
     sendResponse: (response: unknown) => void,
+    isContinuation = false,
   ): Promise<void> {
-    console.log('[Coordinator] ═══ Pipeline Start ═══');
+    if (isContinuation) {
+      console.log(`[Coordinator] ═══ Continuation Start (step ${this.state.continuationCount}) ═══`);
+    } else {
+      console.log('[Coordinator] ═══ Pipeline Start ═══');
+      // Store task for continuation and reset count
+      this.state.activeTaskRaw = payload.rawTask;
+      this.state.continuationCount = 0;
+      this._continuationScheduled = false;
+    }
     const pipelineStart = performance.now();
 
     // -- Readiness gate --
@@ -1754,15 +1776,35 @@ export class Coordinator {
             'invalidated after state-changing action — re-observation required');
         }
 
-        // finish/request_observation terminate the sequence
-        if (action.kind === 'finish' || action.kind === 'request_observation') break;
+        // finish terminates the task entirely
+        if (action.kind === 'finish') {
+          console.log('[Coordinator] Task finished by planner');
+          this.state.activeTaskRaw = null;
+          break;
+        }
+        // request_observation: break but do NOT auto-continue
+        if (action.kind === 'request_observation') break;
       }
 
       this.state.lastObservationId = captureResult.observationId as string;
       this.state.step += 1;
 
       const pipelineMs = Math.round(performance.now() - pipelineStart);
-      console.log(`[Coordinator] ═══ Pipeline Done (${pipelineMs}ms) ═══`);
+
+      // ── Determine if continuation is needed ──
+      const shouldContinue =
+        executedStateChangingAction
+        && this.state.activeTaskRaw !== null
+        && this.state.isActive
+        && this.state.continuationCount < MAX_TASK_CONTINUATIONS
+        && this.state.activeTabId === sessionTabId
+        && !this._continuationScheduled;
+
+      if (shouldContinue) {
+        console.log(`[Coordinator] ═══ Pipeline Done (${pipelineMs}ms) — continuation scheduled ═══`);
+      } else {
+        console.log(`[Coordinator] ═══ Pipeline Done (${pipelineMs}ms) ═══`);
+      }
 
       this.setPhase('idle');
       try { await this.persistState(); } catch { /* best-effort for pipeline completion */ }
@@ -1782,10 +1824,60 @@ export class Coordinator {
           perceptionMs: perceptionResult ? Math.round(perceptionResult.totalMs) : 0,
         },
         pipelineMs,
+        continuation: shouldContinue,
       });
+
+      // ── Schedule continuation on next turn ──
+      if (shouldContinue) {
+        this._continuationScheduled = true;
+        this.state.continuationCount++;
+        const nextStep = this.state.continuationCount;
+        const taskRaw = this.state.activeTaskRaw!;
+        const tabId = sessionTabId;
+        console.log('[Coordinator] Continuation scheduled:', {
+          nextStep,
+          reason: 'state-changing-action-success',
+        });
+        // Schedule on next turn — do NOT recurse inline
+        setTimeout(() => {
+          this._continuationScheduled = false;
+          // Guard: verify session is still active and tab unchanged
+          if (!this.state.isActive || this.state.activeTabId !== tabId || !this.state.activeTaskRaw) {
+            console.log('[Coordinator] Continuation cancelled: session/tab/task changed');
+            return;
+          }
+          if (this.state.continuationCount > MAX_TASK_CONTINUATIONS) {
+            console.log('[Coordinator] Continuation limit reached:', MAX_TASK_CONTINUATIONS);
+            return;
+          }
+          console.log('[Coordinator] Continuation starting:', {
+            step: nextStep,
+            taskContinued: true,
+          });
+          const continuationPayload: UserTaskPayload = { rawTask: taskRaw, tabId };
+          // No-op sendResponse for continuation — original already responded
+          const noopResponse = (resp: unknown) => {
+            const r = resp as any;
+            if (r?.error) {
+              console.error('[Coordinator] Continuation pipeline error:', r.error);
+            } else if (r?.ack) {
+              console.log('[Coordinator] Continuation action executed:', {
+                executedActions: r.executedActions,
+                pipelineMs: r.pipelineMs,
+                continuation: r.continuation,
+              });
+            }
+          };
+          this.handleUserTask(continuationPayload, noopResponse, true);
+        }, 100);
+      } else if (this.state.continuationCount >= MAX_TASK_CONTINUATIONS) {
+        console.log('[Coordinator] Task continuation limit reached:', MAX_TASK_CONTINUATIONS);
+        this.state.activeTaskRaw = null;
+      }
     } catch (e) {
       console.error('[Coordinator] Pipeline error:', e);
       this.setPhase('idle');
+      this._continuationScheduled = false;
       try { await this.persistState(); } catch { /* best-effort in error path */ }
       sendResponse({ error: `Pipeline failed: ${e}` });
     }
