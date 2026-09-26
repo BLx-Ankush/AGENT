@@ -630,11 +630,23 @@ REDACTED VALUES:
 
 ALLOWED ACTIONS: {allowed}
 
-Return JSON:
-{{"actions": [{{"kind": "click|type_token|type_text|focus|scroll|wait|finish|request_observation",
-               "id": "action-1", "targetNodeId": "<scene-node-id>",
-               "text": "<only for type_text>", "token": "<SENSITIVE_... only for type_token>",
-               "reason": "<brief explanation>"}}]}}
+RULES:
+- Prefer direct actions: click, focus, type_text, type_token, select, scroll.
+- Do NOT use "wait" for ordinary page interactions (search, forms, clicking).
+- Only use "wait" when waiting is genuinely required for page state (e.g. loading indicator).
+- If "wait" is used, "milliseconds" MUST be an integer > 0 and <= 30000. Prefer 500–5000 ms.
+- Never invent unnecessarily long waits.
+- For normal search/form/click workflows, do NOT include a wait action.
+- Each action MUST have "kind", "id", and "reason".
+- Actions targeting a DOM element MUST include "targetNodeId" matching a scene node id.
+
+Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
+{{"actions": [
+  {{"kind": "click", "id": "action-1", "targetNodeId": "<scene-node-id>", "reason": "<brief>"}},
+  {{"kind": "type_text", "id": "action-2", "targetNodeId": "<scene-node-id>", "text": "<text>", "reason": "<brief>"}},
+  {{"kind": "type_token", "id": "action-3", "targetNodeId": "<scene-node-id>", "token": "<SENSITIVE_...>", "reason": "<brief>"}},
+  {{"kind": "wait", "id": "action-4", "milliseconds": 1000, "reason": "<only if genuinely needed>"}}
+]}}
 """
 
     def _parse_actions(
