@@ -444,7 +444,9 @@ class LLMPlanner(PlannerAdapter):
                         ],
                         "temperature": 0.1,
                         "max_tokens": 512,
-                        "response_format": {"type": "json_object"},
+                        # NOTE: response_format omitted for provider compatibility.
+                        # Not all OpenAI-compatible providers support it.
+                        # JSON output is enforced by the system prompt instead.
                     }
 
                     try:
