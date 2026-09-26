@@ -560,6 +560,47 @@ class LLMPlanner(PlannerAdapter):
 
                     raw_text = resp.json().get("response", "{}")
 
+                # ── JSON structure diagnostic ──
+                try:
+                    _decoder = json.JSONDecoder()
+                    _obj, _end = _decoder.raw_decode(raw_text)
+                    _trailing = raw_text[_end:]
+                    _trailing_stripped = _trailing.strip()
+                    _trailing_ws_only = len(_trailing) > 0 and len(_trailing_stripped) == 0
+                    _trailing_first_nw = next((c for c in _trailing if not c.isspace()), None)
+
+                    # Classify trailing content
+                    _trailing_category = "none"
+                    _second_json = False
+                    if len(_trailing) == 0:
+                        _trailing_category = "none"
+                    elif _trailing_ws_only:
+                        _trailing_category = "whitespace_only"
+                    elif _trailing_stripped:
+                        # Check if trailing starts with another JSON value
+                        _ws_count = len(_trailing) - len(_trailing.lstrip())
+                        try:
+                            _, _s_end = _decoder.raw_decode(raw_text, _end + _ws_count)
+                            _second_json = True
+                            _trailing_category = "second_json_value"
+                        except (json.JSONDecodeError, ValueError):
+                            # Check if it looks like prose/text
+                            if _trailing_first_nw and _trailing_first_nw.isalpha():
+                                _trailing_category = "trailing_prose_or_text"
+                            else:
+                                _trailing_category = "malformed_trailing_data"
+
+                    print(f"[LLMPlanner] JSON structure diagnostics: "
+                          f"rawLen={len(raw_text)}, firstJsonEnd={_end}, "
+                          f"trailingLen={len(_trailing)}, "
+                          f"trailingWsOnly={_trailing_ws_only}, "
+                          f"trailingFirstNonWs={repr(_trailing_first_nw)}, "
+                          f"trailingCategory={_trailing_category}, "
+                          f"secondJsonValue={_second_json}")
+                except (json.JSONDecodeError, ValueError):
+                    print(f"[LLMPlanner] JSON structure diagnostics: "
+                          f"rawLen={len(raw_text)}, firstJsonEnd=NONE (no valid JSON start)")
+
                 # ── JSON parse ──
                 try:
                     plan_data = json.loads(raw_text)
