@@ -303,6 +303,16 @@ class OpenAICompatibleResponseAdapter:
         content = message.get("content")
 
         if content is None:
+            # Safe structural diagnostic — log shape only, no raw values
+            msg_keys = sorted(message.keys())
+            finish_reason = choices[0].get("finish_reason")
+            has_reasoning = "reasoning" in message and message["reasoning"] is not None
+            reasoning_type = type(message["reasoning"]).__name__ if has_reasoning else None
+            has_tool_calls = "tool_calls" in message and message["tool_calls"] is not None
+            print(f"[ResponseAdapter] content=null diagnostic: "
+                  f"messageKeys={msg_keys}, finishReason={finish_reason}, "
+                  f"reasoningPresent={has_reasoning}, reasoningType={reasoning_type}, "
+                  f"toolCalls={has_tool_calls}")
             raise ContentExtractionError("message content is null")
 
         # Form 1: String content (most common)
@@ -443,7 +453,7 @@ class LLMPlanner(PlannerAdapter):
                             {"role": "user", "content": prompt},
                         ],
                         "temperature": 0.1,
-                        "max_tokens": 512,
+                        "max_tokens": 4096,  # Reasoning models need headroom for reasoning + content
                         # NOTE: response_format omitted for provider compatibility.
                         # Not all OpenAI-compatible providers support it.
                         # JSON output is enforced by the system prompt instead.
