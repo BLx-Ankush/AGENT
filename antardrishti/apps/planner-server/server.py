@@ -232,6 +232,127 @@ class MockPlanner(PlannerAdapter):
         )
 
 
+# ── OpenAI-Compatible Response Normalization ──────────────────
+
+class ContentExtractionError(Exception):
+    """Raised when provider response content cannot be extracted."""
+    pass
+
+
+class OpenAICompatibleResponseAdapter:
+    """
+    Provider-agnostic normalization for OpenAI-compatible API responses.
+
+    Extracts textual content from the first choice's message, regardless
+    of whether the provider returns content as a string, a list of typed
+    content parts, a list of plain strings, or a mixed array.
+
+    No provider-specific, model-specific, or site-specific branching.
+    The response shape alone determines normalization.
+    """
+
+    def __init__(self):
+        self.last_content_shape: str = "unknown"
+
+    def extract_text(self, resp_json: dict) -> str:
+        """
+        Extract the textual assistant content from a decoded OpenAI-compatible
+        JSON response.
+
+        Supported content forms:
+          1. string:       "{"actions":[...]}"
+          2. text parts:   [{"type": "text", "text": "..."}]
+          3. string list:  ["...", "..."]
+          4. mixed:        [{"type": "text", ...}, {"type": "image_url", ...}]
+
+        Returns the canonical text string for JSON parsing.
+        Raises ContentExtractionError on invalid/unsupported content.
+        """
+        # Navigate to message content
+        choices = resp_json.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            raise ContentExtractionError("no choices in provider response")
+
+        message = choices[0].get("message")
+        if not message or not isinstance(message, dict):
+            raise ContentExtractionError("no message in first choice")
+
+        content = message.get("content")
+
+        if content is None:
+            raise ContentExtractionError("message content is null")
+
+        # Form 1: String content (most common)
+        if isinstance(content, str):
+            self.last_content_shape = "string"
+            return content
+
+        # Form 2-4: Array content
+        if isinstance(content, list):
+            if len(content) == 0:
+                raise ContentExtractionError("message content is empty array")
+
+            text_parts: list[str] = []
+
+            for part in content:
+                if isinstance(part, str):
+                    # Form 3: plain string in array
+                    text_parts.append(part)
+                elif isinstance(part, dict):
+                    part_type = part.get("type", "")
+                    if part_type == "text" and "text" in part:
+                        # Form 2/4: typed text content block
+                        text_val = part["text"]
+                        if isinstance(text_val, str):
+                            text_parts.append(text_val)
+                    # Non-text blocks (image_url, audio, etc.) are skipped
+                # Other types are skipped
+
+            if not text_parts:
+                raise ContentExtractionError(
+                    "content array contains no text-bearing elements"
+                )
+
+            # Determine shape for diagnostics
+            has_dicts = any(isinstance(p, dict) for p in content)
+            has_strings = any(isinstance(p, str) for p in content)
+            if has_dicts and not has_strings:
+                self.last_content_shape = "text_parts[]"
+            elif has_strings and not has_dicts:
+                self.last_content_shape = "string_parts[]"
+            else:
+                self.last_content_shape = "mixed_parts[]"
+
+            return "".join(text_parts)
+
+        # Unsupported content type
+        raise ContentExtractionError(
+            f"unsupported content type: {type(content).__name__}"
+        )
+
+    def normalize_text(self, raw_text: str) -> str:
+        """
+        Apply benign normalization to extracted text:
+          - Strip surrounding whitespace
+          - Strip fenced code markers (```json ... ``` or ``` ... ```)
+        Does NOT perform arbitrary natural-language extraction.
+        """
+        text = raw_text.strip()
+
+        # Strip fenced code block markers
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove opening fence (```json or ```)
+            if lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            # Remove closing fence
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        return text
+
+
 class LLMPlanner(PlannerAdapter):
     """
     Real LLM planner adapter.
@@ -263,6 +384,7 @@ class LLMPlanner(PlannerAdapter):
         self.base_url = os.environ.get("ANTARDRISHTI_LLM_BASE_URL", base_url).rstrip("/")
         self.api_key = os.environ.get("ANTARDRISHTI_LLM_API_KEY", api_key)
         self.use_openai_format = use_openai_format
+        self.response_adapter = OpenAICompatibleResponseAdapter()
         # Auto-detect: Ollama uses its own format, others use OpenAI
         if "11434" in self.base_url or "ollama" in self.base_url.lower():
             self.use_openai_format = False
@@ -278,6 +400,7 @@ class LLMPlanner(PlannerAdapter):
 
         prompt = self._build_prompt(request)
         actions: list[AgentAction] = []
+        error_category: str | None = None
 
         try:
             async with httpx.AsyncClient(timeout=45.0) as client:
@@ -301,13 +424,33 @@ class LLMPlanner(PlannerAdapter):
                         "response_format": {"type": "json_object"},
                     }
 
-                    resp = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-                    resp.raise_for_status()
-                    raw_text = resp.json()["choices"][0]["message"]["content"]
+                    try:
+                        resp = await client.post(
+                            f"{self.base_url}/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        )
+                        resp.raise_for_status()
+                    except Exception as req_err:
+                        error_category = "provider_request_failed"
+                        raise RuntimeError(f"provider_request_failed: {type(req_err).__name__}") from req_err
+
+                    try:
+                        resp_json = resp.json()
+                    except Exception as decode_err:
+                        error_category = "provider_response_invalid"
+                        raise RuntimeError("provider_response_invalid: response is not valid JSON") from decode_err
+
+                    # ── Provider-agnostic response normalization ──
+                    try:
+                        raw_text = self.response_adapter.extract_text(resp_json)
+                    except ContentExtractionError as ext_err:
+                        error_category = "content_extraction_failed"
+                        raise RuntimeError(f"content_extraction_failed: {ext_err}") from ext_err
+
+                    raw_text = self.response_adapter.normalize_text(raw_text)
+                    content_shape = self.response_adapter.last_content_shape
+                    print(f"[LLMPlanner] Provider response normalized (shape: {content_shape})")
 
                 else:
                     # Ollama native format
@@ -318,24 +461,42 @@ class LLMPlanner(PlannerAdapter):
                         "format": "json",
                         "options": {"temperature": 0.1, "num_predict": 512},
                     }
-                    resp = await client.post(
-                        f"{self.base_url}/api/generate",
-                        json=payload,
-                    )
-                    resp.raise_for_status()
+                    try:
+                        resp = await client.post(
+                            f"{self.base_url}/api/generate",
+                            json=payload,
+                        )
+                        resp.raise_for_status()
+                    except Exception as req_err:
+                        error_category = "provider_request_failed"
+                        raise RuntimeError(f"provider_request_failed: {type(req_err).__name__}") from req_err
+
                     raw_text = resp.json().get("response", "{}")
 
-                plan_data = json.loads(raw_text)
-                actions = self._parse_actions(plan_data, request)
+                # ── JSON parse ──
+                try:
+                    plan_data = json.loads(raw_text)
+                except (json.JSONDecodeError, TypeError) as parse_err:
+                    error_category = "planner_json_parse_failed"
+                    raise RuntimeError(f"planner_json_parse_failed: {parse_err}") from parse_err
+
+                # ── Action extraction ──
+                try:
+                    actions = self._parse_actions(plan_data, request)
+                except Exception as action_err:
+                    error_category = "planner_action_parse_failed"
+                    raise RuntimeError(f"planner_action_parse_failed: {action_err}") from action_err
+
                 print(f"[LLMPlanner] {self.model} returned {len(actions)} actions")
 
         except Exception as e:
-            print(f"[LLMPlanner] LLM call failed: {e}")
+            cat = error_category or "unknown"
+            print(f"[LLMPlanner] LLM_FALLBACK ({cat}): {e}")
             actions = [
                 AgentAction(
                     kind="request_observation",
                     id="action-fallback",
-                    reason=f"LLM planning failed: {type(e).__name__}",
+                    reason=f"LLM_FALLBACK ({cat}): {type(e).__name__}",
                 )
             ]
 
