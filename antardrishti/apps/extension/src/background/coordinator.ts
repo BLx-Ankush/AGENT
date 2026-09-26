@@ -889,6 +889,13 @@ export class Coordinator {
       this.state.continuationCount = 0;
       this._continuationScheduled = false;
     }
+    console.log('[Coordinator] Task continuation state initialized:', {
+      isContinuation,
+      hasActiveTask: this.state.activeTaskRaw !== null,
+      continuationCount: this.state.continuationCount,
+      isActive: this.state.isActive,
+      activeTabId: this.state.activeTabId,
+    });
     const pipelineStart = performance.now();
 
     // -- Readiness gate --
@@ -1792,6 +1799,15 @@ export class Coordinator {
       const pipelineMs = Math.round(performance.now() - pipelineStart);
 
       // ── Determine if continuation is needed ──
+      console.log('[Coordinator] Continuation eligibility:', {
+        executedStateChangingAction,
+        hasActiveTask: this.state.activeTaskRaw !== null,
+        isActive: this.state.isActive,
+        continuationCount: this.state.continuationCount,
+        maxContinuations: MAX_TASK_CONTINUATIONS,
+        activeTabMatches: this.state.activeTabId === sessionTabId,
+        continuationAlreadyScheduled: this._continuationScheduled,
+      });
       const shouldContinue =
         executedStateChangingAction
         && this.state.activeTaskRaw !== null
