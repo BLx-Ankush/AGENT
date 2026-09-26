@@ -498,7 +498,33 @@ class LLMPlanner(PlannerAdapter):
 
                     raw_text = self.response_adapter.normalize_text(raw_text)
                     content_shape = self.response_adapter.last_content_shape
+
+                    # ── Safe provider metadata (no raw values) ──
+                    _finish_reason = None
+                    _reasoning_present = False
+                    _reasoning_type = None
+                    try:
+                        _ch0 = resp_json.get("choices", [{}])[0]
+                        _finish_reason = _ch0.get("finish_reason")
+                        _msg = _ch0.get("message", {})
+                        if "reasoning" in _msg and _msg["reasoning"] is not None:
+                            _reasoning_present = True
+                            _reasoning_type = type(_msg["reasoning"]).__name__
+                    except Exception:
+                        pass
+
+                    # ── Safe structural content diagnostics ──
+                    _stripped = raw_text.strip()
+                    _first_nw = _stripped[0] if _stripped else None
+                    _last_nw = _stripped[-1] if _stripped else None
                     print(f"[LLMPlanner] Provider response normalized (shape: {content_shape})")
+                    print(f"[LLMPlanner] Content diagnostics: "
+                          f"len={len(raw_text)}, empty={len(raw_text)==0}, "
+                          f"wsOnly={len(_stripped)==0 and len(raw_text)>0}, "
+                          f"firstChar={repr(_first_nw)}, lastChar={repr(_last_nw)}, "
+                          f"startsObj={_first_nw=='{'}, startsArr={_first_nw=='['}, "
+                          f"finishReason={_finish_reason}, "
+                          f"reasoningPresent={_reasoning_present}, reasoningType={_reasoning_type}")
 
                 else:
                     # Ollama native format
