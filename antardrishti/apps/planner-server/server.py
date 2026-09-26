@@ -391,7 +391,7 @@ Return JSON:
     def _parse_actions(
         self, plan_data: dict, request: PlannerRequest
     ) -> list[AgentAction]:
-        actions = []
+        actions: list[AgentAction] = []
         raw_actions = plan_data.get("actions", [])
 
         valid_kinds = {
@@ -401,15 +401,30 @@ Return JSON:
         node_ids = {n.id for n in request.scene.nodes}
 
         for i, raw in enumerate(raw_actions[:5]):
+            if not isinstance(raw, dict):
+                continue
+
             kind = raw.get("kind", "")
             if kind not in valid_kinds:
                 continue
 
             target = raw.get("targetNodeId")
             if target and target not in node_ids:
-                reason="No valid actions parsed from LLM response",
-            ))
-        
+                continue
+
+            actions.append(
+                AgentAction(
+                    kind=kind,
+                    id=raw.get("id", f"action-{i + 1}"),
+                    targetNodeId=target,
+                    text=raw.get("text"),
+                    token=raw.get("token"),
+                    expectedRole=raw.get("expectedRole"),
+                    reason=raw.get("reason"),
+                    milliseconds=raw.get("milliseconds"),
+                )
+            )
+
         return actions
 
 
@@ -551,10 +566,9 @@ def main():
 
     print(f"[Planner] Starting on http://{args.host}:{args.port}")
     uvicorn.run(
-        "server:app",
+        app,
         host=args.host,
         port=args.port,
-        reload=args.reload,
     )
 
 
