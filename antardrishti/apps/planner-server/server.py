@@ -266,6 +266,12 @@ class LLMPlanner(PlannerAdapter):
         # Auto-detect: Ollama uses its own format, others use OpenAI
         if "11434" in self.base_url or "ollama" in self.base_url.lower():
             self.use_openai_format = False
+        # OpenAI-compatible providers need /v1 in the path.
+        # If user provides just the domain (e.g. https://apichat.budsin.dev),
+        # append /v1. If URL already has /v1 (e.g. https://api.openai.com/v1),
+        # don't double it.
+        if self.use_openai_format and "/v1" not in self.base_url:
+            self.base_url = self.base_url + "/v1"
 
     async def plan(self, request: PlannerRequest) -> PlannerResponse:
         import httpx
@@ -450,7 +456,7 @@ async def metrics():
         "recentRequests": request_log[-10:] if request_log else [],
     }
 
-@app.post("/v1/plan", response_model=PlannerResponse)
+@app.post("/v1/plan", response_model=PlannerResponse, response_model_exclude_none=True)
 async def plan(request: Request):
     start_time = time.time()
     
@@ -557,7 +563,7 @@ def main():
             use_openai_format=use_openai,
         )
         backend_label = "Ollama" if args.ollama else "OpenAI-compatible"
-        print(f"[Planner] LLM adapter ({backend_label}): {args.model} @ {base_url}")
+        print(f"[Planner] LLM adapter ({backend_label}): {current_adapter.model} @ {current_adapter.base_url}")
         if use_openai and not api_key:
             print("[Planner] WARNING: ANTARDRISHTI_LLM_API_KEY not set")
     else:

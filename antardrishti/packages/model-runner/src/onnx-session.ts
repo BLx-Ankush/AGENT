@@ -60,6 +60,12 @@ export class OnnxSession implements InferenceSession {
     return this._backend;
   }
 
+  /** Access raw ONNX session for model-specific typed tensor inputs (e.g. int64). */
+  get rawSession(): any { return this._onnxSession; }
+
+  /** Access ORT module for creating non-float32 tensors. */
+  get ort(): any { return this._ort; }
+
   async initialize(): Promise<InferenceMetrics> {
     const startTime = performance.now();
 

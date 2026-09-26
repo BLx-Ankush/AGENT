@@ -136,7 +136,7 @@ await runTest('PROV-1 — user task gets USER_TASK provenance in planner request
     protocolVersion: '2.0' as const,
     session: { id: SESSION, step: 0, observationId: 'obs', origin: ORIGIN, documentGeneration: DOC_GEN, viewport: { width: 1920, height: 1080, devicePixelRatio: 1 } },
     task: {
-      provenance: 'USER_TASK' as const,
+      // P0.4: provenance=USER_TASK is internal semantic only — not on wire
       sanitized: result.sanitizedTask,
       risk: result.risk,
     },
@@ -145,7 +145,8 @@ await runTest('PROV-1 — user task gets USER_TASK provenance in planner request
     allowedActions: ['click', 'type_text'],
   };
 
-  assert.strictEqual(plannerRequest.task.provenance, 'USER_TASK');
+  // Wire-level task must NOT contain provenance (strict schema)
+  assert.strictEqual((plannerRequest.task as any).provenance, undefined, 'task.provenance must not be on wire');
 });
 
 await runTest('PROV-2 — DOM visible text node gets PAGE_DATA provenance', () => {
@@ -377,7 +378,6 @@ await runTest('EGRESS-15 — planner request preserves USER_TASK vs PAGE_DATA pr
     protocolVersion: '2.0' as const,
     session: { id: SESSION, step: 0, observationId: 'obs', origin: ORIGIN, documentGeneration: DOC_GEN, viewport: { width: 1920, height: 1080, devicePixelRatio: 1 } },
     task: {
-      provenance: 'USER_TASK' as const,
       sanitized: result.sanitizedTask,
       risk: result.risk,
     },
@@ -386,8 +386,8 @@ await runTest('EGRESS-15 — planner request preserves USER_TASK vs PAGE_DATA pr
     allowedActions: ['click'],
   };
 
-  // Task is USER_TASK
-  assert.strictEqual(plannerRequest.task.provenance, 'USER_TASK');
+  // Wire-level task has no provenance (strict schema)
+  assert.strictEqual((plannerRequest.task as any).provenance, undefined, 'task.provenance must not be on wire');
 
   // Scene nodes are PAGE_DATA
   for (const node of (plannerRequest.scene as any).nodes) {
@@ -485,7 +485,6 @@ await runTest('PROD-PATH — real Coordinator sanitize → planner request has c
     protocolVersion: '2.0' as const,
     session: { id: SESSION, step: 0, observationId: 'obs', origin: ORIGIN, documentGeneration: DOC_GEN, viewport: { width: 1920, height: 1080, devicePixelRatio: 1 } },
     task: {
-      provenance: 'USER_TASK' as const,
       sanitized: sanitized.sanitizedTask,
       risk: sanitized.risk,
     },
@@ -494,8 +493,8 @@ await runTest('PROD-PATH — real Coordinator sanitize → planner request has c
     allowedActions: ['click'],
   };
 
-  // Task is USER_TASK
-  assert.strictEqual(plannerRequest.task.provenance, 'USER_TASK');
+  // Wire-level task has no provenance (strict schema)
+  assert.strictEqual((plannerRequest.task as any).provenance, undefined, 'task.provenance must not be on wire');
 
   // All scene nodes PAGE_DATA
   for (const node of (plannerRequest.scene as any).nodes) {

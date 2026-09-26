@@ -41,6 +41,7 @@ import {
 import { TokenVault } from '@antardrishti/privacy';
 import { Sanitizer } from '@antardrishti/privacy';
 import { redactImageData, type RedactionRegion } from '@antardrishti/privacy';
+import { compactScene } from '@antardrishti/privacy';
 import { EgressVerifier } from '@antardrishti/egress-verifier';
 import {
   DeterministicPlanner,
@@ -967,6 +968,27 @@ export class Coordinator {
         controlRegions: harvestResult?.canvasContext?.controlRegions?.length || 0,
       });
 
+      // ── P1-C: Bind authoritative document generation ──────
+      // The content-script owns the document lifecycle. It creates a new
+      // documentGeneration on page load and on real navigations. The capture
+      // subsystem records capture metadata but must not invent a competing
+      // generation identity. After harvest, we bind the content-script's
+      // authoritative generation into the capture stamp so ALL downstream
+      // operations (perception, fingerprints, freshness, planner session,
+      // execution) use the same single identity.
+      if (harvestResult?.documentGeneration) {
+        const captureGen = captureResult.stamp.documentGeneration;
+        const harvestGen = harvestResult.documentGeneration;
+        if (captureGen !== harvestGen) {
+          console.log('[Coordinator] P1-C: Binding authoritative documentGeneration from harvest:', {
+            capture: captureGen,
+            harvest: harvestGen,
+            action: 'using harvest (content-script) as authority',
+          });
+          captureResult.stamp.documentGeneration = harvestGen;
+        }
+      }
+
       // P1-F stale-pipeline check: after harvest await
       if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
         console.error('[Coordinator] P1-F: STALE PIPELINE — session/tab changed during harvest');
@@ -1287,6 +1309,33 @@ export class Coordinator {
         });
       }
 
+      // ── Step 5c: Scene compaction (if needed) ────────────────
+      // Large real-world pages (Amazon, etc.) can produce >500 DOM+visual
+      // nodes. The wire schema enforces max(500). Rather than truncating
+      // arbitrarily, compact by relevance: task-matching actionable targets
+      // first, then viewport-visible, then offscreen duplicates last.
+      const SCENE_BUDGET = 500;
+      if (sanitized.scene.nodes.length > SCENE_BUDGET) {
+        const compaction = compactScene(
+          sanitized.scene.nodes as any[],
+          {
+            maxNodes: SCENE_BUDGET,
+            viewport: {
+              width: captureResult.stamp.viewportWidth,
+              height: captureResult.stamp.viewportHeight,
+            },
+            taskText: payload.rawTask,
+          },
+        );
+        sanitized.scene.nodes = compaction.nodes as typeof sanitized.scene.nodes;
+        console.log('[Coordinator] [5c/8] Scene compacted:', {
+          original: compaction.originalCount,
+          retained: compaction.retainedCount,
+          removed: compaction.removedCount,
+          tiers: compaction.tiers,
+        });
+      }
+
       // ── Step 6: Build planner request ────────────────────
       let plannerRequest: PlannerRequestInput = {
         protocolVersion: '2.0',
@@ -1303,7 +1352,9 @@ export class Coordinator {
           },
         },
         task: {
-          provenance: 'USER_TASK' as const,  // P0.4: user-supplied, trusted instruction
+          // P0.4: provenance=USER_TASK is the internal semantic —
+          // the wire schema (PlannerRequestSchema.task.strict()) carries only sanitized+risk.
+          // Scene nodes carry provenance: 'PAGE_DATA' on the wire.
           sanitized: sanitized.sanitizedTask,
           risk: sanitized.risk,
         },
@@ -1753,7 +1804,37 @@ export class Coordinator {
         'background',
       ));
       return response;
-    } catch (e) {
+    } catch (e: any) {
+      const errMsg = String(e?.message || e || '');
+      const isDisconnect = errMsg.includes('Could not establish connection')
+        || errMsg.includes('Receiving end does not exist');
+
+      if (isDisconnect) {
+        // MV3: Content script not connected — tab was open before extension
+        // loaded/reloaded. Programmatically inject and retry once.
+        console.warn('[Coordinator] Content script not connected — injecting programmatically');
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['content-script.js'],
+          });
+          // Wait for content script to initialize
+          await new Promise(r => setTimeout(r, 500));
+
+          // Retry harvest
+          const retryResponse = await chrome.tabs.sendMessage(tabId, createMessage(
+            MESSAGE_TYPES.REQUEST_SNAPSHOT,
+            { observationId },
+            'background',
+          ));
+          console.log('[Coordinator] Content script injection + harvest retry succeeded');
+          return retryResponse;
+        } catch (retryErr) {
+          console.error('[Coordinator] Content script injection/retry failed:', retryErr);
+          return null;
+        }
+      }
+
       console.warn('[Coordinator] Harvest request failed:', e);
       return null;
     }

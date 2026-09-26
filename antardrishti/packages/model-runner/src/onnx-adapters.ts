@@ -464,7 +464,7 @@ async function loadPpocrCharset(modelDirUrl: string = ''): Promise<string[]> {
   const dictUrl = modelDirUrl
     ? `${modelDirUrl}/ppocr_keys_v1.txt`
     : (typeof chrome !== 'undefined' && chrome.runtime)
-      ? chrome.runtime.getURL('assets/models/ppocr_keys_v1.txt')
+      ? chrome.runtime.getURL('models/ppocr_keys_v1.txt')
       : null;
 
   if (dictUrl) {
@@ -767,36 +767,40 @@ export class OnnxFaceDetectorSession implements InferenceSession {
       }
     }
 
-    const inputs = new Map<string, Float32Array>([
-      ['image', imageTensor],
-      ['conf_threshold', new Float32Array([0.5])],
-      ['iou_threshold', new Float32Array([0.3])],
-    ]);
-    const shapes = new Map<string, number[]>([
-      ['image', [1, 3, INPUT_SIZE, INPUT_SIZE]],
-      ['conf_threshold', [1]],  // rank-1, not scalar []
-      ['iou_threshold', [1]],   // rank-1, not scalar []
-    ]);
+    // Build feeds directly using raw ONNX session for mixed-type tensors.
+    // max_detections requires int64 — OnnxSession.run() only supports float32.
+    const ort = this.session.ort;
+    const rawSession = this.session.rawSession;
 
-    // max_detections is int64 — OnnxSession handles float32 only.
-    // We omit it here; the model uses its default (896 anchors pre-NMS).
-    // The ONNX model was exported with max_detections as an optional input.
+    if (!ort || !rawSession) {
+      console.warn('[OnnxFaceDetector] Session not initialized');
+      return [];
+    }
+
+    const feeds: Record<string, any> = {
+      'image': new ort.Tensor('float32', imageTensor, [1, 3, INPUT_SIZE, INPUT_SIZE]),
+      'conf_threshold': new ort.Tensor('float32', new Float32Array([0.5]), [1]),
+      'iou_threshold': new ort.Tensor('float32', new Float32Array([0.3]), [1]),
+      'max_detections': new ort.Tensor('int64', BigInt64Array.from([BigInt(100)]), [1]),
+    };
+
     try {
-      const { outputs, outputShapes } = await this.session.run(inputs, shapes);
+      const results = await rawSession.run(feeds);
 
       // Output: 'selectedBoxes' [1, N, 16]
       // Format per detection: [ymin, xmin, ymax, xmax, kp1x, kp1y, kp2x, kp2y, ..., score, class]
-      const boxKey = outputs.has('selectedBoxes') ? 'selectedBoxes' : [...outputs.keys()][0];
-      const boxes = boxKey ? outputs.get(boxKey) : undefined;
-      const boxShape = boxKey ? outputShapes.get(boxKey) : undefined;
+      const boxKey = results['selectedBoxes'] ? 'selectedBoxes' : Object.keys(results)[0];
+      const tensor = boxKey ? results[boxKey] : undefined;
 
-      if (!boxes || !boxShape || boxShape.length < 2) {
-        console.warn('[OnnxFaceDetector] No selectedBoxes output, keys:', [...(outputs?.keys() ?? [])]);
+      if (!tensor || !tensor.dims || tensor.dims.length < 2) {
+        console.warn('[OnnxFaceDetector] No selectedBoxes output, keys:', Object.keys(results));
         return [];
       }
 
+      const boxes = new Float32Array(tensor.data);
+      const boxShape = [...tensor.dims];
+
       const faces: FaceDetection[] = [];
-      // Shape may be [1, N, 16] or [1, 16] if only 1 detection
       const N = boxShape.length >= 3 ? boxShape[1] : 1;
       const FEAT = boxShape[boxShape.length - 1]; // 16
       const imgW = imageData.width;
