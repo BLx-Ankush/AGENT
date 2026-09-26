@@ -884,18 +884,7 @@ export class Coordinator {
       console.log(`[Coordinator] ═══ Continuation Start (step ${this.state.continuationCount}) ═══`);
     } else {
       console.log('[Coordinator] ═══ Pipeline Start ═══');
-      // Store task for continuation and reset count
-      this.state.activeTaskRaw = payload.rawTask;
-      this.state.continuationCount = 0;
-      this._continuationScheduled = false;
     }
-    console.log('[Coordinator] Task continuation state initialized:', {
-      isContinuation,
-      hasActiveTask: this.state.activeTaskRaw !== null,
-      continuationCount: this.state.continuationCount,
-      isActive: this.state.isActive,
-      activeTabId: this.state.activeTabId,
-    });
     const pipelineStart = performance.now();
 
     // -- Readiness gate --
@@ -939,6 +928,22 @@ export class Coordinator {
         return;
       }
     }
+
+    // Store task for continuation AFTER session is established.
+    // startSession() replaces this.state with {...INITIAL_STATE, ...},
+    // so any assignment before it would be wiped.
+    if (!isContinuation) {
+      this.state.activeTaskRaw = payload.rawTask;
+      this.state.continuationCount = 0;
+      this._continuationScheduled = false;
+    }
+    console.log('[Coordinator] Task continuation state:', {
+      isContinuation,
+      hasActiveTask: this.state.activeTaskRaw !== null,
+      continuationCount: this.state.continuationCount,
+      isActive: this.state.isActive,
+      activeTabId: this.state.activeTabId,
+    });
 
     // P1-F: All downstream operations MUST use the session-bound tab ID,
     // never the payload's claimed tabId. This is the authoritative binding.
