@@ -431,9 +431,22 @@ class LLMPlanner(PlannerAdapter):
                             json=payload,
                         )
                         resp.raise_for_status()
+                    except httpx.HTTPStatusError as http_err:
+                        status = http_err.response.status_code
+                        error_category = "provider_http_error"
+                        raise RuntimeError(
+                            f"provider_http_error: HTTP {status}"
+                        ) from http_err
+                    except httpx.RequestError as req_err:
+                        error_category = "provider_request_failed"
+                        raise RuntimeError(
+                            f"provider_request_failed: {type(req_err).__name__}"
+                        ) from req_err
                     except Exception as req_err:
                         error_category = "provider_request_failed"
-                        raise RuntimeError(f"provider_request_failed: {type(req_err).__name__}") from req_err
+                        raise RuntimeError(
+                            f"provider_request_failed: {type(req_err).__name__}"
+                        ) from req_err
 
                     try:
                         resp_json = resp.json()
@@ -467,9 +480,22 @@ class LLMPlanner(PlannerAdapter):
                             json=payload,
                         )
                         resp.raise_for_status()
+                    except httpx.HTTPStatusError as http_err:
+                        status = http_err.response.status_code
+                        error_category = "provider_http_error"
+                        raise RuntimeError(
+                            f"provider_http_error: HTTP {status}"
+                        ) from http_err
+                    except httpx.RequestError as req_err:
+                        error_category = "provider_request_failed"
+                        raise RuntimeError(
+                            f"provider_request_failed: {type(req_err).__name__}"
+                        ) from req_err
                     except Exception as req_err:
                         error_category = "provider_request_failed"
-                        raise RuntimeError(f"provider_request_failed: {type(req_err).__name__}") from req_err
+                        raise RuntimeError(
+                            f"provider_request_failed: {type(req_err).__name__}"
+                        ) from req_err
 
                     raw_text = resp.json().get("response", "{}")
 
