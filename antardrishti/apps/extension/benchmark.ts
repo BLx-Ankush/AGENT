@@ -187,6 +187,24 @@ async function runBenchmark(): Promise<void> {
       runFn: (img: ImageData) => models!.textDetector.detectRegions(img),
     },
     {
+      adapterId: 'OnnxOcrSession',
+      task: 'ocr-recognition',
+      manifest: OCR_RECOGNIZER_MANIFEST,
+      session: models.ocrRecognizer,
+      runFn: (_img: ImageData) => {
+        // OCR takes a cropped text region — create a 250×30 text-like crop
+        const cropCanvas = new OffscreenCanvas(250, 30);
+        const cropCtx = cropCanvas.getContext('2d')!;
+        cropCtx.fillStyle = '#c8c8c8';
+        cropCtx.fillRect(0, 0, 250, 30);
+        cropCtx.fillStyle = '#000000';
+        cropCtx.font = '20px sans-serif';
+        cropCtx.fillText('Benchmark OCR test', 10, 22);
+        const cropData = cropCtx.getImageData(0, 0, 250, 30);
+        return models!.ocrRecognizer.recognizeText(cropData, [50, 100, 250, 30]);
+      },
+    },
+    {
       adapterId: 'OnnxFaceDetectorSession',
       task: 'face-detection',
       manifest: FACE_DETECTOR_MANIFEST,
