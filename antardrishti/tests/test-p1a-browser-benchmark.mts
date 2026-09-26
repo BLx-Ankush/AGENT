@@ -178,6 +178,7 @@ await runTest('REAL-6 — real inference executes (benchmark script has inferenc
   // Verify the benchmark script contains actual inference function calls
   const benchSrc = readFileSync(join(ROOT, 'apps', 'extension', 'benchmark.ts'), 'utf-8');
   assert.ok(benchSrc.includes('detectRegions'), 'Calls detectRegions()');
+  assert.ok(benchSrc.includes('recognizeText'), 'Calls recognizeText()');
   assert.ok(benchSrc.includes('detectFaces'), 'Calls detectFaces()');
   assert.ok(benchSrc.includes('parseRegions'), 'Calls parseRegions()');
   assert.ok(benchSrc.includes('loadProductionModels'), 'Calls loadProductionModels()');
@@ -258,7 +259,7 @@ await runTest('OUTPUT-13 — JSON result file exists and has content', () => {
   const data = JSON.parse(content);
   assert.ok(data.version, 'Has version field');
   assert.ok(Array.isArray(data.results), 'Has results array');
-  assert.ok(data.results.length >= 3, 'Has at least 3 results');
+  assert.ok(data.results.length >= 4, 'Has at least 4 results');
 });
 
 await runTest('OUTPUT-14 — CSV result file exists and has content', () => {
