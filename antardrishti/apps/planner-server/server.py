@@ -239,6 +239,29 @@ class ContentExtractionError(Exception):
     pass
 
 
+class PlannerFailureError(Exception):
+    """Raised when the LLM/provider fails and no valid plan is produced.
+    
+    This must NOT be converted into a request_observation action.
+    It propagates as a non-2xx HTTP response to the extension client.
+    """
+    # Category -> HTTP status mapping
+    STATUS_MAP = {
+        "provider_http_error": 502,
+        "provider_request_failed": 504,
+        "provider_response_invalid": 502,
+        "content_extraction_failed": 502,
+        "planner_json_parse_failed": 502,
+        "planner_action_parse_failed": 502,
+    }
+
+    def __init__(self, category: str, message: str):
+        self.category = category
+        self.message = message
+        self.http_status = self.STATUS_MAP.get(category, 502)
+        super().__init__(message)
+
+
 class OpenAICompatibleResponseAdapter:
     """
     Provider-agnostic normalization for OpenAI-compatible API responses.
@@ -517,14 +540,9 @@ class LLMPlanner(PlannerAdapter):
 
         except Exception as e:
             cat = error_category or "unknown"
-            print(f"[LLMPlanner] LLM_FALLBACK ({cat}): {e}")
-            actions = [
-                AgentAction(
-                    kind="request_observation",
-                    id="action-fallback",
-                    reason=f"LLM_FALLBACK ({cat}): {type(e).__name__}",
-                )
-            ]
+            sanitized_msg = str(e)
+            print(f"[LLMPlanner] PROVIDER_FAILURE ({cat}): {sanitized_msg}")
+            raise PlannerFailureError(cat, sanitized_msg) from e
 
         return PlannerResponse(
             protocolVersion="2.0",
@@ -666,7 +684,34 @@ async def plan(request: Request):
     # Note: empty redactions[] is valid if page has no PII
     
     # Plan
-    response = await current_adapter.plan(planner_request)
+    try:
+        response = await current_adapter.plan(planner_request)
+    except PlannerFailureError as pf:
+        elapsed_ms = round((time.time() - start_time) * 1000)
+        # Log failure (category-only, no raw content)
+        request_log.append({
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "observationId": planner_request.session.observationId,
+            "origin": planner_request.session.origin,
+            "task_risk": planner_request.task.risk,
+            "nodeCount": len(planner_request.scene.nodes),
+            "redactionCount": len(planner_request.redactions),
+            "actionCount": 0,
+            "actionKinds": [],
+            "planId": None,
+            "seal": seal[:16] + "..." if len(seal) > 16 else seal,
+            "latencyMs": elapsed_ms,
+            "adapter": current_adapter.name,
+            "error": pf.category,
+        })
+        print(f"[Planner] FAILURE | {current_adapter.name} | {elapsed_ms}ms | {pf.category}: {pf.message}")
+        raise HTTPException(
+            status_code=pf.http_status,
+            detail={
+                "category": pf.category,
+                "message": pf.message,
+            },
+        )
     
     elapsed_ms = round((time.time() - start_time) * 1000)
     
