@@ -1,0 +1,477 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-26T05:14:30.186Z",
+  "fixture": "apps/demo-page/index.html",
+  "browser": "Chrome",
+  "browserVersion": "153.0.0.0",
+  "backend": "WASM",
+  "groundTruth": {
+    "pii": {
+      "total": 13,
+      "domDetectable": 12,
+      "visualOnly": 1
+    },
+    "visualRegions": {
+      "total": 8,
+      "canvasRendered": 3,
+      "sensitive": 6
+    },
+    "uiControls": {
+      "total": 8,
+      "destructive": 1,
+      "visualOnly": 1
+    },
+    "redactionTargets": {
+      "total": 8,
+      "critical": 7,
+      "high": 1
+    }
+  },
+  "domOnly": {
+    "pii": {
+      "precision": 100,
+      "recall": 100,
+      "f1": 100,
+      "TP": 12,
+      "FP": 0,
+      "FN": 0,
+      "gtCount": 12
+    },
+    "piiTotalRecall": 92.3,
+    "visualRegionRecall": 62.5
+  },
+  "domPlusVisual": {
+    "piiTotalRecallPotential": 100,
+    "visualRegionRecallPotential": 100,
+    "note": "With visual perception, canvas-rendered PII and regions become detectable"
+  },
+  "ablationGap": {
+    "piiEntitiesMissed": 1,
+    "visualRegionsMissed": 3,
+    "conclusion": "Visual perception adds coverage for 3 canvas-rendered regions and 1 visual-only PII entities that DOM-only scanning cannot detect."
+  },
+  "browserLatency": [
+    {
+      "modelId": "text-detector-v1",
+      "adapterId": "OnnxTextDetectorSession",
+      "task": "text-detection",
+      "backend": "wasm",
+      "coldLoadMs": 745,
+      "warmupRuns": 3,
+      "measuredRuns": 10,
+      "p50Ms": 831.7,
+      "p95Ms": 880.6,
+      "minMs": 822.6,
+      "maxMs": 880.6,
+      "meanMs": 836.08,
+      "modelSizeBytes": 4745517,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "status": "PASS",
+      "error": "",
+      "browser": "Chrome",
+      "browserVersion": "153.0.0.0",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-26T04:22:47.841Z"
+    },
+    {
+      "modelId": "ocr-recognizer-v1",
+      "adapterId": "OnnxOcrSession",
+      "task": "ocr-recognition",
+      "backend": "wasm",
+      "coldLoadMs": 745.3,
+      "warmupRuns": 3,
+      "measuredRuns": 10,
+      "p50Ms": 147.5,
+      "p95Ms": 173.2,
+      "minMs": 130.2,
+      "maxMs": 173.2,
+      "meanMs": 148.6,
+      "modelSizeBytes": 10822323,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "status": "PASS",
+      "error": "",
+      "browser": "Chrome",
+      "browserVersion": "153.0.0.0",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-26T04:24:44.210Z"
+    },
+    {
+      "modelId": "face-detector-v1",
+      "adapterId": "OnnxFaceDetectorSession",
+      "task": "face-detection",
+      "backend": "wasm",
+      "coldLoadMs": 744.4,
+      "warmupRuns": 3,
+      "measuredRuns": 10,
+      "p50Ms": 1.7,
+      "p95Ms": 5.9,
+      "minMs": 1.4,
+      "maxMs": 5.9,
+      "meanMs": 2.3,
+      "modelSizeBytes": 535842,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "status": "PASS",
+      "error": "",
+      "browser": "Chrome",
+      "browserVersion": "153.0.0.0",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-26T04:24:44.295Z"
+    },
+    {
+      "modelId": "ui-region-detector-v1",
+      "adapterId": "OnnxRegionParserSession",
+      "task": "region-parsing",
+      "backend": "wasm",
+      "coldLoadMs": 934.4,
+      "warmupRuns": 3,
+      "measuredRuns": 10,
+      "p50Ms": 517.7,
+      "p95Ms": 609.4,
+      "minMs": 501.7,
+      "maxMs": 609.4,
+      "meanMs": 527.1,
+      "modelSizeBytes": 12136163,
+      "precision": "NOT_MEASURED",
+      "recall": "NOT_MEASURED",
+      "f1": "NOT_MEASURED",
+      "status": "PASS",
+      "error": "",
+      "browser": "Chrome",
+      "browserVersion": "153.0.0.0",
+      "fixtureVersion": "synthetic-v1",
+      "timestamp": "2026-09-26T04:26:57.952Z"
+    }
+  ],
+  "metrics": [
+    {
+      "section": "S1",
+      "metric": "pii_precision_dom",
+      "value": 100,
+      "denominator": 12,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S1",
+      "metric": "pii_recall_dom",
+      "value": 100,
+      "denominator": 12,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S1",
+      "metric": "pii_f1_dom",
+      "value": 100,
+      "denominator": "harmonic",
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S2",
+      "metric": "visual_only_pii_count",
+      "value": 1,
+      "denominator": 13,
+      "unit": "count",
+      "config": "ground-truth",
+      "source": "measured"
+    },
+    {
+      "section": "S2",
+      "metric": "dom_only_total_recall",
+      "value": 92.3,
+      "denominator": 13,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S2",
+      "metric": "ablation_gap",
+      "value": 7.7,
+      "denominator": 13,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S2",
+      "metric": "canvas_sensitive_requiring_visual",
+      "value": 2,
+      "denominator": 8,
+      "unit": "count",
+      "config": "ground-truth",
+      "source": "measured"
+    },
+    {
+      "section": "S3",
+      "metric": "dom_region_recall",
+      "value": 62.5,
+      "denominator": 8,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S3",
+      "metric": "visual_only_regions",
+      "value": 3,
+      "denominator": 8,
+      "unit": "count",
+      "config": "ground-truth",
+      "source": "measured"
+    },
+    {
+      "section": "S4",
+      "metric": "dom_control_recall",
+      "value": 100,
+      "denominator": 8,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S4",
+      "metric": "destructive_controls",
+      "value": 1,
+      "denominator": 8,
+      "unit": "count",
+      "config": "ground-truth",
+      "source": "measured"
+    },
+    {
+      "section": "S5",
+      "metric": "dom_redaction_recall",
+      "value": 75,
+      "denominator": 8,
+      "unit": "%",
+      "config": "dom-only",
+      "source": "measured"
+    },
+    {
+      "section": "S5",
+      "metric": "visual_only_redaction_targets",
+      "value": 2,
+      "denominator": 8,
+      "unit": "count",
+      "config": "ground-truth",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "text-detection_cold_ms",
+      "value": 745,
+      "denominator": 1,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "text-detection_p50_ms",
+      "value": 831.7,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "text-detection_p95_ms",
+      "value": 880.6,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "text-detection_size_mb",
+      "value": 4.7,
+      "denominator": 1,
+      "unit": "MB",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "ocr-recognition_cold_ms",
+      "value": 745.3,
+      "denominator": 1,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "ocr-recognition_p50_ms",
+      "value": 147.5,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "ocr-recognition_p95_ms",
+      "value": 173.2,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "ocr-recognition_size_mb",
+      "value": 10.8,
+      "denominator": 1,
+      "unit": "MB",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "face-detection_cold_ms",
+      "value": 744.4,
+      "denominator": 1,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "face-detection_p50_ms",
+      "value": 1.7,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "face-detection_p95_ms",
+      "value": 5.9,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "face-detection_size_mb",
+      "value": 0.5,
+      "denominator": 1,
+      "unit": "MB",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "region-parsing_cold_ms",
+      "value": 934.4,
+      "denominator": 1,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "region-parsing_p50_ms",
+      "value": 517.7,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "region-parsing_p95_ms",
+      "value": 609.4,
+      "denominator": 10,
+      "unit": "ms",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S6",
+      "metric": "region-parsing_size_mb",
+      "value": 12.1,
+      "denominator": 1,
+      "unit": "MB",
+      "config": "Chrome/WASM",
+      "source": "measured"
+    },
+    {
+      "section": "S7",
+      "metric": "dom_vs_visual_pii_gap",
+      "value": 1,
+      "denominator": 13,
+      "unit": "entities",
+      "config": "ablation",
+      "source": "measured"
+    },
+    {
+      "section": "S7",
+      "metric": "dom_vs_visual_region_gap",
+      "value": 3,
+      "denominator": 8,
+      "unit": "regions",
+      "config": "ablation",
+      "source": "measured"
+    },
+    {
+      "section": "S8",
+      "metric": "browser_text_det_precision",
+      "value": "NOT_MEASURED",
+      "denominator": "no_pixel_GT",
+      "unit": "%",
+      "config": "Chrome/WASM",
+      "source": "NOT_MEASURED"
+    },
+    {
+      "section": "S8",
+      "metric": "browser_text_det_recall",
+      "value": "NOT_MEASURED",
+      "denominator": "no_pixel_GT",
+      "unit": "%",
+      "config": "Chrome/WASM",
+      "source": "NOT_MEASURED"
+    },
+    {
+      "section": "S8",
+      "metric": "browser_face_det_precision",
+      "value": "NOT_MEASURED",
+      "denominator": "no_pixel_GT",
+      "unit": "%",
+      "config": "Chrome/WASM",
+      "source": "NOT_MEASURED"
+    },
+    {
+      "section": "S8",
+      "metric": "browser_ocr_accuracy",
+      "value": "NOT_MEASURED",
+      "denominator": "no_ocr_GT",
+      "unit": "%",
+      "config": "Chrome/WASM",
+      "source": "NOT_MEASURED"
+    },
+    {
+      "section": "S8",
+      "metric": "webgpu_latency",
+      "value": "NOT_MEASURED",
+      "denominator": "not_initialized",
+      "unit": "ms",
+      "config": "Chrome/WebGPU",
+      "source": "NOT_MEASURED"
+    }
+  ]
+}
