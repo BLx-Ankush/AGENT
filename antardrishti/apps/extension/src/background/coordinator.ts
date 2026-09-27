@@ -1039,20 +1039,6 @@ export class Coordinator {
         return;
       }
 
-      // ── Detect navigation between observations ──
-      if (isContinuation && this.state.lastDocumentGeneration !== null) {
-        const currentDocGen = captureResult.stamp.documentGeneration;
-        if (currentDocGen !== this.state.lastDocumentGeneration) {
-          this.state.taskProgress.stateChanges.documentChanged = true;
-          this.state.taskProgress.stateChanges.navigationOccurred = true;
-          console.log('[Coordinator] Navigation detected:', {
-            documentChanged: true,
-            progressStep: this.state.taskProgress.step,
-          });
-        }
-      }
-      this.state.lastDocumentGeneration = captureResult.stamp.documentGeneration;
-
       // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
         sessionTabId,
@@ -1085,6 +1071,29 @@ export class Coordinator {
           captureResult.stamp.documentGeneration = harvestGen;
         }
       }
+
+      // ── Detect navigation using AUTHORITATIVE harvest generation ──
+      // MUST happen AFTER P1-C binding so we compare the content-script's
+      // authoritative generation, not the capture subsystem's metadata.
+      // Capture generates a new stamp per capture; only the harvest
+      // documentGeneration reflects real page navigation.
+      const authoritativeDocGen = captureResult.stamp.documentGeneration; // post-binding
+      if (isContinuation && this.state.lastDocumentGeneration !== null) {
+        const changed = authoritativeDocGen !== this.state.lastDocumentGeneration;
+        console.log('[Coordinator] Navigation comparison:', {
+          previousPresent: true,
+          changed,
+        });
+        if (changed) {
+          this.state.taskProgress.stateChanges.documentChanged = true;
+          this.state.taskProgress.stateChanges.navigationOccurred = true;
+          console.log('[Coordinator] Navigation detected (authoritative):', {
+            documentChanged: true,
+            progressStep: this.state.taskProgress.step,
+          });
+        }
+      }
+      this.state.lastDocumentGeneration = authoritativeDocGen;
 
       // P1-F stale-pipeline check: after harvest await
       if (!this._isCurrentPipelineBinding(pipelineSessionId, sessionTabId)) {
