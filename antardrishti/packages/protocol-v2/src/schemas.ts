@@ -98,6 +98,30 @@ export const ProtectedVisualRegionSchema = z.object({
   bbox: BboxSchema,
 }).strict();
 
+// ── Task progress (continuation context) ─────────────────────
+
+/** Safe action outcome — NEVER contains raw values, tokens, or page content */
+const ActionOutcomeSchema = z.enum(['success', 'failure', 'rejected']);
+
+const ActionHistoryEntrySchema = z.object({
+  kind: z.string().min(1).max(50),
+  outcome: ActionOutcomeSchema,
+}).strict();
+
+const StateChangesSchema = z.object({
+  textEntered: z.boolean(),
+  navigationOccurred: z.boolean(),
+  documentChanged: z.boolean(),
+}).strict();
+
+export const TaskProgressSchema = z.object({
+  step: z.number().int().min(0),
+  lastAction: ActionHistoryEntrySchema.optional(),
+  actionHistory: z.array(ActionHistoryEntrySchema).max(5),
+  taskStatus: z.enum(['in_progress', 'completed', 'blocked']),
+  stateChanges: StateChangesSchema,
+}).strict();
+
 // ── Planner request ──────────────────────────────────────────
 
 export const PlannerRequestSchema = z.object({
@@ -125,6 +149,7 @@ export const PlannerRequestSchema = z.object({
       'scroll', 'wait', 'request_observation', 'finish',
     ]),
   ),
+  taskProgress: TaskProgressSchema.optional(),
 }).strict();
 
 // ── Planner response ─────────────────────────────────────────
