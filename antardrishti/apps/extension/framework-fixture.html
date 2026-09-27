@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANTARDRISHTI — Framework Controlled Input Fixture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0f0f23;
+      color: #e0e0e0;
+      padding: 2rem;
+    }
+    h1 { color: #64ffda; margin-bottom: 1.5rem; font-size: 1.5rem; }
+    h2 { color: #80cbc4; margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
+    .section {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    label { display: block; margin-bottom: 0.3rem; color: #b0bec5; font-size: 0.9rem; }
+    input, select, textarea {
+      width: 100%;
+      padding: 0.6rem;
+      border: 1px solid #37474f;
+      border-radius: 4px;
+      background: #263238;
+      color: #fff;
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #64ffda;
+    }
+    .state-display {
+      background: #0d2137;
+      border: 1px solid #1565c0;
+      border-radius: 4px;
+      padding: 0.8rem;
+      font-family: 'Fira Code', monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      margin-top: 0.5rem;
+      color: #82b1ff;
+    }
+    .test-result {
+      padding: 0.5rem;
+      border-radius: 4px;
+      margin: 0.3rem 0;
+      font-size: 0.85rem;
+    }
+    .test-pass { background: #1b5e20; color: #a5d6a7; }
+    .test-fail { background: #b71c1c; color: #ef9a9a; }
+    #test-output { margin-top: 1rem; }
+    button {
+      padding: 0.6rem 1.2rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .btn-primary { background: #64ffda; color: #000; }
+    .btn-secondary { background: #37474f; color: #fff; }
+    .counter { font-size: 1.5rem; color: #64ffda; }
+  </style>
+</head>
+<body>
+  <h1>🧪 Framework Controlled Input Fixture</h1>
+
+  <!-- SECTION 1: Synchronous controlled text input -->
+  <div class="section" id="sync-section">
+    <h2>1. Synchronous Controlled Text Input</h2>
+    <label for="sync-text-input">Search query (controlled):</label>
+    <input type="search" id="sync-text-input" role="searchbox" placeholder="Type here..." />
+    <div class="state-display" id="sync-state">state.searchQuery = ""</div>
+  </div>
+
+  <!-- SECTION 2: Debounced/async controlled text input -->
+  <div class="section" id="async-section">
+    <h2>2. Debounced Controlled Text Input (300ms)</h2>
+    <label for="async-text-input">Debounced query:</label>
+    <input type="text" id="async-text-input" placeholder="Debounced..." />
+    <div class="state-display" id="async-state">state.debouncedQuery = ""</div>
+    <div class="state-display" id="async-committed">committed = ""</div>
+  </div>
+
+  <!-- SECTION 3: Controlled select -->
+  <div class="section" id="select-section">
+    <h2>3. Controlled Select</h2>
+    <label for="controlled-select">Category:</label>
+    <select id="controlled-select">
+      <option value="">-- Select --</option>
+      <option value="electronics">Electronics</option>
+      <option value="clothing">Clothing</option>
+      <option value="books">Books</option>
+    </select>
+    <div class="state-display" id="select-state">state.category = ""</div>
+  </div>
+
+  <!-- SECTION 4: Re-render survival -->
+  <div class="section" id="rerender-section">
+    <h2>4. Re-render Survival Test</h2>
+    <label for="rerender-input">Type, then click Re-render:</label>
+    <input type="text" id="rerender-input" placeholder="Enter value..." />
+    <button class="btn-secondary" id="rerender-btn" type="button">Re-render</button>
+    <div class="counter" id="render-count">Renders: 0</div>
+    <div class="state-display" id="rerender-state">state.rerenderValue = ""</div>
+  </div>
+
+  <!-- SECTION 5: Native plain HTML input (baseline) -->
+  <div class="section" id="native-section">
+    <h2>5. Native Plain HTML Input (Baseline)</h2>
+    <label for="native-input">Plain input:</label>
+    <input type="text" id="native-input" placeholder="Plain HTML..." />
+    <label for="native-textarea">Plain textarea:</label>
+    <textarea id="native-textarea" rows="2" placeholder="Plain textarea..."></textarea>
+  </div>
+
+  <!-- SECTION 6: Search form with submit -->
+  <div class="section" id="search-section">
+    <h2>6. Search Form (searchbox + submit)</h2>
+    <form id="search-form" role="search">
+      <label for="search-input">Search:</label>
+      <input type="search" id="search-input" role="searchbox" name="q" placeholder="Search..." />
+      <button type="submit" class="btn-primary" id="search-submit">Search</button>
+    </form>
+    <div class="state-display" id="search-state">state.submitted = false, state.submittedQuery = ""</div>
+  </div>
+
+  <!-- Test runner -->
+  <div class="section">
+    <h2>Test Results</h2>
+    <button class="btn-primary" id="run-tests" type="button">Run Verification Tests</button>
+    <div id="test-output"></div>
+  </div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════
+    // Framework simulation: controlled state management
+    // ═══════════════════════════════════════════════════════════
+
+    const appState = {
+      searchQuery: '',
+      debouncedQuery: '',
+      committedDebounced: '',
+      category: '',
+      rerenderValue: '',
+      renderCount: 0,
+      submitted: false,
+      submittedQuery: '',
+    };
+
+    // Track all state changes for verification
+    const stateLog = [];
+
+    function setState(key, value) {
+      const old = appState[key];
+      appState[key] = value;
+      stateLog.push({ key, old, new: value, timestamp: Date.now() });
+      renderState();
+    }
+
+    function renderState() {
+      document.getElementById('sync-state').textContent =
+        `state.searchQuery = "${appState.searchQuery}"`;
+      document.getElementById('async-state').textContent =
+        `state.debouncedQuery = "${appState.debouncedQuery}"`;
+      document.getElementById('async-committed').textContent =
+        `committed = "${appState.committedDebounced}"`;
+      document.getElementById('select-state').textContent =
+        `state.category = "${appState.category}"`;
+      document.getElementById('rerender-state').textContent =
+        `state.rerenderValue = "${appState.rerenderValue}"`;
+      document.getElementById('render-count').textContent =
+        `Renders: ${appState.renderCount}`;
+      document.getElementById('search-state').textContent =
+        `state.submitted = ${appState.submitted}, state.submittedQuery = "${appState.submittedQuery}"`;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 1. Synchronous controlled input — React-like pattern
+    // Framework intercepts value setter and syncs state immediately
+    // ═══════════════════════════════════════════════════════════
+
+    const syncInput = document.getElementById('sync-text-input');
+    const nativeInputDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype, 'value'
+    );
+
+    // Override value property to simulate React controlled component
+    let _syncValue = '';
+    Object.defineProperty(syncInput, 'value', {
+      get() { return _syncValue; },
+      set(v) {
+        _syncValue = v;
+        // Call native setter so the DOM reflects the value
+        nativeInputDescriptor.set.call(syncInput, v);
+        // Sync state (like React setState)
+        setState('searchQuery', v);
+      },
+      configurable: true,
+    });
+
+    syncInput.addEventListener('input', (e) => {
+      // Re-read from native to get what the native setter wrote
+      const nativeVal = nativeInputDescriptor.get.call(syncInput);
+      _syncValue = nativeVal;
+      setState('searchQuery', nativeVal);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. Debounced controlled input — 300ms debounce
+    // ═══════════════════════════════════════════════════════════
+
+    const asyncInput = document.getElementById('async-text-input');
+    let debounceTimer = null;
+    let _asyncValue = '';
+
+    Object.defineProperty(asyncInput, 'value', {
+      get() { return _asyncValue; },
+      set(v) {
+        _asyncValue = v;
+        nativeInputDescriptor.set.call(asyncInput, v);
+        setState('debouncedQuery', v);
+        // Debounced commit
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          setState('committedDebounced', v);
+        }, 300);
+      },
+      configurable: true,
+    });
+
+    asyncInput.addEventListener('input', () => {
+      const nativeVal = nativeInputDescriptor.get.call(asyncInput);
+      _asyncValue = nativeVal;
+      setState('debouncedQuery', nativeVal);
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        setState('committedDebounced', nativeVal);
+      }, 300);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 3. Controlled select
+    // ═══════════════════════════════════════════════════════════
+
+    const selectEl = document.getElementById('controlled-select');
+    const nativeSelectDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype, 'value'
+    );
+    let _selectValue = '';
+
+    Object.defineProperty(selectEl, 'value', {
+      get() { return _selectValue; },
+      set(v) {
+        _selectValue = v;
+        nativeSelectDescriptor.set.call(selectEl, v);
+        setState('category', v);
+      },
+      configurable: true,
+    });
+
+    selectEl.addEventListener('change', () => {
+      const nativeVal = nativeSelectDescriptor.get.call(selectEl);
+      _selectValue = nativeVal;
+      setState('category', nativeVal);
+    });
+
+    selectEl.addEventListener('input', () => {
+      const nativeVal = nativeSelectDescriptor.get.call(selectEl);
+      _selectValue = nativeVal;
+      setState('category', nativeVal);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 4. Re-render survival
+    // ═══════════════════════════════════════════════════════════
+
+    const rerenderInput = document.getElementById('rerender-input');
+    let _rerenderValue = '';
+
+    Object.defineProperty(rerenderInput, 'value', {
+      get() { return _rerenderValue; },
+      set(v) {
+        _rerenderValue = v;
+        nativeInputDescriptor.set.call(rerenderInput, v);
+        setState('rerenderValue', v);
+      },
+      configurable: true,
+    });
+
+    rerenderInput.addEventListener('input', () => {
+      const nativeVal = nativeInputDescriptor.get.call(rerenderInput);
+      _rerenderValue = nativeVal;
+      setState('rerenderValue', nativeVal);
+    });
+
+    document.getElementById('rerender-btn').addEventListener('click', () => {
+      // Simulate re-render: remove and re-insert the input
+      const parent = rerenderInput.parentNode;
+      const nextSibling = rerenderInput.nextSibling;
+      parent.removeChild(rerenderInput);
+
+      appState.renderCount++;
+
+      // Re-insert (simulates React re-render)
+      parent.insertBefore(rerenderInput, nextSibling);
+
+      // Restore state value (like React re-rendering with state)
+      nativeInputDescriptor.set.call(rerenderInput, appState.rerenderValue);
+      _rerenderValue = appState.rerenderValue;
+
+      renderState();
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 6. Search form
+    // ═══════════════════════════════════════════════════════════
+
+    document.getElementById('search-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const query = document.getElementById('search-input').value;
+      setState('submitted', true);
+      setState('submittedQuery', query);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // Test runner — validates native setter propagation
+    // ═══════════════════════════════════════════════════════════
+
+    function runTests() {
+      const results = [];
+      const output = document.getElementById('test-output');
+      output.innerHTML = '';
+
+      function assert(condition, name) {
+        results.push({ name, pass: condition });
+        const div = document.createElement('div');
+        div.className = `test-result ${condition ? 'test-pass' : 'test-fail'}`;
+        div.textContent = `${condition ? '✅' : '❌'} ${name}`;
+        output.appendChild(div);
+      }
+
+      // Test 1: Native setter reaches controlled state
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype, 'value'
+      )?.set;
+
+      nativeSetter.call(syncInput, 'TestValue123');
+      syncInput.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: 'TestValue123',
+      }));
+      assert(
+        appState.searchQuery === 'TestValue123',
+        'T1: Native setter → controlled input → state updated'
+      );
+
+      // Test 2: Select native setter reaches state
+      const selectSetter = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype, 'value'
+      )?.set;
+
+      selectSetter.call(selectEl, 'electronics');
+      selectEl.dispatchEvent(new Event('input', { bubbles: true }));
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      assert(
+        appState.category === 'electronics',
+        'T2: Native setter → controlled select → state updated'
+      );
+
+      // Test 3: Re-render survival
+      nativeSetter.call(rerenderInput, 'SurvivalTest');
+      rerenderInput.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+      }));
+      const valueBefore = appState.rerenderValue;
+      document.getElementById('rerender-btn').click();
+      assert(
+        appState.rerenderValue === valueBefore && valueBefore === 'SurvivalTest',
+        'T3: Value survives re-render'
+      );
+
+      // Test 4: Debounced input reaches state immediately
+      nativeSetter.call(asyncInput, 'DebouncedTest');
+      asyncInput.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+      }));
+      assert(
+        appState.debouncedQuery === 'DebouncedTest',
+        'T4: Debounced input → immediate state update'
+      );
+
+      // Test 5: Debounced commit (async) — wait 400ms
+      setTimeout(() => {
+        assert(
+          appState.committedDebounced === 'DebouncedTest',
+          'T5: Debounced commit after 300ms'
+        );
+
+        // Test 6: Plain native input works
+        const nativeInput = document.getElementById('native-input');
+        nativeSetter.call(nativeInput, 'PlainTest');
+        nativeInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        assert(
+          nativeInput.value === 'PlainTest',
+          'T6: Plain native input works'
+        );
+
+        // Summary
+        const passed = results.filter(r => r.pass).length;
+        const failed = results.filter(r => !r.pass).length;
+        const summary = document.createElement('div');
+        summary.className = `test-result ${failed === 0 ? 'test-pass' : 'test-fail'}`;
+        summary.textContent = `\n${passed} passed, ${failed} failed`;
+        summary.style.marginTop = '1rem';
+        summary.style.fontWeight = 'bold';
+        output.appendChild(summary);
+      }, 400);
+    }
+
+    document.getElementById('run-tests').addEventListener('click', runTests);
+
+    // Initial render
+    renderState();
+  </script>
+</body>
+</html>

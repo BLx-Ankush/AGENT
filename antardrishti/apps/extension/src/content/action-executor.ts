@@ -334,12 +334,40 @@ function executeTypeText(
   el.focus();
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    el.value = text;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    // Use the native prototype value setter to bypass framework wrappers.
+    // React, Angular, Vue etc. override the element's value property descriptor.
+    // Using the prototype setter triggers the native browser behavior that
+    // frameworks listen to, ensuring controlled components update their state.
+    const proto = el instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : HTMLTextAreaElement.prototype;
+    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+    if (nativeSetter) {
+      nativeSetter.call(el, text);
+    } else {
+      // Fallback: direct assignment (works for plain HTML inputs)
+      el.value = text;
+    }
+
+    // Dispatch InputEvent with proper inputType for framework detection.
+    // React 16+ uses inputType to detect synthetic vs real input events.
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: false,
+      inputType: 'insertText',
+      data: text,
+    }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   } else {
+    // contenteditable
     el.textContent = text;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: false,
+      inputType: 'insertText',
+      data: text,
+    }));
   }
 
   return { actionId, success: true, outcome: 'success' };
@@ -395,7 +423,19 @@ function executeSelect(
     return { actionId, success: false, outcome: 'toctou_rejected', error: toctouError };
   }
 
-  el.value = option.value;
+  // Use native prototype setter for framework compatibility
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLSelectElement.prototype, 'value',
+  )?.set;
+
+  if (nativeSetter) {
+    nativeSetter.call(el, option.value);
+  } else {
+    el.value = option.value;
+  }
+
+  // Dispatch both input and change for framework detection
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
 
   return { actionId, success: true, outcome: 'success' };

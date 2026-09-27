@@ -1119,6 +1119,8 @@ export class Coordinator {
       console.log('[Coordinator] ═══ Pipeline Start ═══');
     }
     const pipelineStart = performance.now();
+    // ── Phase 4: Per-stage latency instrumentation ──
+    const timing: Record<string, number> = {};
 
     // -- Readiness gate --
     // Ensures no user task can enter perception before the inference
@@ -1232,7 +1234,10 @@ export class Coordinator {
         return;
       }
 
+      timing.captureMs = Math.round(performance.now() - pipelineStart);
+
       // ── Step 2: Request DOM harvest + canvas context ─────
+      const harvestStart = performance.now();
       const harvestResult = await this.requestHarvest(
         sessionTabId,
         captureResult.observationId,
@@ -1323,6 +1328,8 @@ export class Coordinator {
         this.setPhase('idle');
         return;
       }
+
+      timing.harvestMs = Math.round(performance.now() - harvestStart);
 
       // -- Step 3: Perception --
       // Chrome: send imageDataUrl (PNG string) to offscreen document.
@@ -1463,7 +1470,10 @@ export class Coordinator {
         this.setPhase('idle');
         return;
       }
+      timing.perceptionMs = Math.round(performance.now() - perceptionStart);
+
       // ── Step 4: DOM↔Visual Reconciliation + Unified scene graph ──
+      const reconcileStart = performance.now();
       const domNodes: SceneNode[] = harvestResult?.nodes || [];
       const visualGroundings = perceptionResult?.groundings || [];
 
@@ -1524,7 +1534,10 @@ export class Coordinator {
         total: unifiedNodes.length,
       });
 
-      // ── Step 5: Sanitize unified scene ─────────────────────
+      timing.reconcileMs = Math.round(performance.now() - reconcileStart);
+
+      // ── Step 5: Sanitize unified scene ─────────────────
+      const sanitizeStart = performance.now();
       this.setPhase('sanitizing');
       const sanitized = this.sanitizer.sanitize(
         payload.rawTask,
@@ -1636,7 +1649,10 @@ export class Coordinator {
         });
       }
 
-      // ── Step 5c: Scene compaction (if needed) ────────────────
+      timing.sanitizeMs = Math.round(performance.now() - sanitizeStart);
+
+      // ── Step 5c: Scene compaction (if needed) ───────────
+      const compactionStart = performance.now();
       // Large real-world pages (Amazon, etc.) can produce >500 DOM+visual
       // nodes. The wire schema enforces max(500). Rather than truncating
       // arbitrarily, compact by relevance: task-matching actionable targets
@@ -1662,6 +1678,8 @@ export class Coordinator {
           tiers: compaction.tiers,
         });
       }
+
+      timing.compactionMs = Math.round(performance.now() - compactionStart);
 
       // ── Step 6: Build planner request ────────────────────
       let plannerRequest: PlannerRequestInput = {
@@ -1721,6 +1739,7 @@ export class Coordinator {
       // Only sanitized tokens and scene graph enter the egress verifier.
 
       // ── Step 7: Egress verification with bounded remediation ──
+      const egressStart = performance.now();
       this.setPhase('verifying');
       const plannerDestination = this.state.plannerUrl || DEFAULT_PLANNER_URL;
       let remediationAttempts = 0;
@@ -1820,7 +1839,10 @@ export class Coordinator {
         return;
       }
 
-      // ── Step 8: Plan ─────────────────────────────────────
+      timing.egressMs = Math.round(performance.now() - egressStart);
+
+      // ── Step 8: Plan ──────────────────────────────────
+      const plannerStart = performance.now();
       this.setPhase('planning');
       let plannerResponse: PlannerResponse;
 
@@ -1838,7 +1860,10 @@ export class Coordinator {
         return;
       }
 
-      // ── Validate plan ─────────────────────────────────────
+      timing.plannerMs = Math.round(performance.now() - plannerStart);
+
+      // ── Validate plan ─────────────────────────────────
+      const validationStart = performance.now();
       const nodeIds = new Set(
         sanitized.scene.nodes.map((n) => n.id),
       );
@@ -2000,10 +2025,13 @@ export class Coordinator {
       }
 
       // ── ONE ACTION → RE-OBSERVE (contract §1.5) ──────────
+      timing.validationMs = Math.round(performance.now() - validationStart);
+
       // Execute ONLY the first state-changing action.
       // Non-state-changing actions (scroll, wait, finish) can be batched.
       // P0-A: Confirmation is checked per-action immediately before execution.
       this.setPhase('executing');
+      const executionStart = performance.now();
       let executedStateChangingAction = false;
       let executedActionCount = 0;
 
@@ -2131,6 +2159,90 @@ export class Coordinator {
           return;
         }
 
+        // ── Phase 3: Target diagnostics logging ──────────────────
+        // Log the planner's chosen target classification and compatible
+        // search-submit candidates. Never log field values/tokens/secrets.
+        if (actionTargetId && harvestResult?.nodes) {
+          const targetNode = (harvestResult.nodes as any[]).find((n: any) => n.id === actionTargetId);
+          const sanitizedNode = sanitized?.scene?.nodes?.find((n: any) => n.id === actionTargetId);
+          if (targetNode) {
+            console.log('[Coordinator] Target diagnostics:', {
+              nodeId: targetNode.id,
+              role: targetNode.role,
+              tag: targetNode.tag,
+              inputType: targetNode.inputType || 'none',
+              name: (targetNode.name || '').substring(0, 40),
+              supportedActions: sanitizedNode?.supportedActions || [],
+              interactionRole: sanitizedNode?.interactionRole || 'unknown',
+              plannerVisible: !!sanitizedNode,
+              executableCompatible: !!sanitizedNode?.supportedActions?.includes(action.kind),
+            });
+          }
+
+          // Log compatible search-submit candidates for search tasks
+          const taskIntent = classifyTaskIntent(this.state.activeTaskRaw || '');
+          if (taskIntent === 'search' && (action.kind === 'click' || action.kind === 'type_text')) {
+            const submitCandidates = sanitized?.scene?.nodes?.filter((n: any) =>
+              n.interactionRole === 'search_submit' || n.interactionRole === 'search_input'
+            ) || [];
+            if (submitCandidates.length > 0) {
+              console.log('[Coordinator] Search-submit candidates:', submitCandidates.map((n: any) => ({
+                nodeId: n.id,
+                role: n.role,
+                interactionRole: n.interactionRole,
+                supportedActions: n.supportedActions,
+              })));
+            }
+          }
+        }
+        // ── FINISH AUTHORIZATION: validate BEFORE execution ──────
+        // The finish gate MUST authorize BEFORE executeAction runs.
+        // This makes the sequence "Executing: finish → success → Finish rejected" impossible.
+        if (action.kind === 'finish') {
+          const taskRaw = this.state.activeTaskRaw || '';
+          const intent = classifyTaskIntent(taskRaw);
+          const finishCtx: FinishGateContext = {
+            taskIntent: intent,
+            textEntered: this.state.taskProgress.stateChanges.textEntered,
+            navigationOccurred: this.state.taskProgress.stateChanges.navigationOccurred,
+            documentChanged: this.state.taskProgress.stateChanges.documentChanged,
+            submitActionAttempted: this.state.taskProgress.stateChanges.submitActionAttempted,
+            submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
+            goalSatisfied: this.state.taskProgress.stateChanges.goalSatisfied,
+          };
+          const finishResult = validateFinish(finishCtx);
+
+          if (!finishResult.allowed) {
+            console.log('[Coordinator] Finish REJECTED (pre-execution):', {
+              reason: finishResult.reason,
+              taskIntent: intent,
+              lastActionKind: this.state.taskProgress.lastAction?.kind,
+              textEntered: finishCtx.textEntered,
+              navigationOccurred: finishCtx.navigationOccurred,
+              submitActionAttempted: finishCtx.submitActionAttempted,
+              submitActionConfirmed: finishCtx.submitActionConfirmed,
+              goalSatisfied: finishCtx.goalSatisfied,
+            });
+            // DO NOT execute. DO NOT increment progress. DO NOT record success.
+            // DO NOT clear activeTaskRaw. Schedule bounded fresh replan.
+            this._finishRejectedRecovery(
+              pipelineSessionId,
+              sessionTabId,
+              finishResult.reason,
+              sendResponse,
+              captureResult,
+              sanitized,
+            );
+            return;
+          }
+
+          // Finish authorized — proceed with execution and commit
+          console.log('[Coordinator] Finish AUTHORIZED (pre-execution):', {
+            reason: finishResult.reason,
+            taskIntent: intent,
+          });
+        }
+
         console.log('[Coordinator] Executing:', action.kind, action.id);
         const execResult = await this.executeAction(
           sessionTabId,
@@ -2205,41 +2317,9 @@ export class Coordinator {
             'invalidated after state-changing action — re-observation required');
         }
 
-        // finish terminates the task entirely — but validate locally first
+        // finish: already authorized above — commit task completion
         if (action.kind === 'finish') {
-          const taskRaw = this.state.activeTaskRaw || '';
-          const intent = classifyTaskIntent(taskRaw);
-          const finishCtx: FinishGateContext = {
-            taskIntent: intent,
-            textEntered: this.state.taskProgress.stateChanges.textEntered,
-            navigationOccurred: this.state.taskProgress.stateChanges.navigationOccurred,
-            documentChanged: this.state.taskProgress.stateChanges.documentChanged,
-            submitActionAttempted: this.state.taskProgress.stateChanges.submitActionAttempted,
-            submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
-            goalSatisfied: this.state.taskProgress.stateChanges.goalSatisfied,
-          };
-          const finishResult = validateFinish(finishCtx);
-
-          if (!finishResult.allowed) {
-            console.log('[Coordinator] Finish rejected:', {
-              reason: finishResult.reason,
-              taskIntent: intent,
-              lastActionKind: this.state.taskProgress.lastAction?.kind,
-              textEntered: finishCtx.textEntered,
-              navigationOccurred: finishCtx.navigationOccurred,
-              submitActionAttempted: finishCtx.submitActionAttempted,
-              submitActionConfirmed: finishCtx.submitActionConfirmed,
-              goalSatisfied: finishCtx.goalSatisfied,
-            });
-            // Do NOT execute finish — break the action loop.
-            // The continuation mechanism will re-observe and re-plan.
-            break;
-          }
-
-          console.log('[Coordinator] Task finished by planner:', {
-            reason: finishResult.reason,
-            taskIntent: intent,
-          });
+          console.log('[Coordinator] Task finished (authorized + executed)');
           this.state.activeTaskRaw = null;
           break;
         }
@@ -2247,10 +2327,16 @@ export class Coordinator {
         if (action.kind === 'request_observation') break;
       }
 
+      timing.executionMs = Math.round(performance.now() - executionStart);
+
       this.state.lastObservationId = captureResult.observationId as string;
       this.state.step += 1;
 
       const pipelineMs = Math.round(performance.now() - pipelineStart);
+      timing.totalMs = pipelineMs;
+
+      // ── Phase 4: Complete pipeline timing log ──
+      console.log('[Coordinator] Pipeline timing:', timing);
 
       // ── Determine if continuation is needed ──
       console.log('[Coordinator] Continuation eligibility:', {
@@ -2351,6 +2437,108 @@ export class Coordinator {
       try { await this.persistState(); } catch { /* best-effort in error path */ }
       sendResponse({ error: `Pipeline failed: ${e}` });
     }
+  }
+
+  // ── Finish rejected recovery ─────────────────────────────
+
+  /**
+   * Handle rejected finish: schedule a fresh replan through the
+   * existing continuation mechanism. The rejected finish is NOT
+   * recorded as a successful action — no progress increment,
+   * no history entry, no task termination.
+   *
+   * Bounded by MAX_TASK_CONTINUATIONS to prevent infinite loops.
+   */
+  private _finishRejectedRecovery(
+    pipelineSessionId: string,
+    sessionTabId: number,
+    rejectionReason: string,
+    sendResponse: (resp: unknown) => void,
+    captureResult: any,
+    sanitized: any,
+  ): void {
+    // Record finish rejection as a failed action for diagnostics
+    const rejectEntry: ActionHistoryEntry = { kind: 'finish', outcome: 'rejected' };
+    this.state.taskProgress.lastAction = rejectEntry;
+    this.state.taskProgress.actionHistory.push(rejectEntry);
+    if (this.state.taskProgress.actionHistory.length > MAX_ACTION_HISTORY) {
+      this.state.taskProgress.actionHistory.shift();
+    }
+
+    // Check continuation budget
+    if (this.state.continuationCount >= MAX_TASK_CONTINUATIONS) {
+      console.log('[Coordinator] Finish rejected but continuation limit reached:', {
+        continuationCount: this.state.continuationCount,
+        maxContinuations: MAX_TASK_CONTINUATIONS,
+      });
+      // Terminate safely as incomplete/blocked
+      this.state.taskProgress.taskStatus = 'blocked';
+      this.state.activeTaskRaw = null;
+      this.setPhase('idle');
+      sendResponse({
+        ack: false,
+        error: `Task blocked: finish rejected (${rejectionReason}) and continuation limit reached`,
+      });
+      return;
+    }
+
+    // Respond to current pipeline, then schedule continuation
+    const pipelineMs = Math.round(performance.now());
+    this.setPhase('idle');
+    sendResponse({
+      ack: true,
+      observationId: captureResult.observationId,
+      captureHash: captureResult.stamp.hash,
+      redactions: sanitized.redactions.length,
+      finishRejected: true,
+      rejectionReason,
+      continuation: true,
+    });
+
+    // Invalidate cache so next pipeline captures fresh observation
+    this.capture.invalidateCache();
+
+    // Schedule continuation
+    this._continuationScheduled = true;
+    this.state.continuationCount++;
+    const nextStep = this.state.continuationCount;
+    const taskRaw = this.state.activeTaskRaw!;
+    const tabId = sessionTabId;
+    console.log('[Coordinator] Finish-rejected recovery scheduled:', {
+      nextStep,
+      reason: `finish-rejected:${rejectionReason}`,
+      continuationCount: this.state.continuationCount,
+    });
+
+    setTimeout(() => {
+      this._continuationScheduled = false;
+      if (!this.state.isActive || this.state.activeTabId !== tabId || !this.state.activeTaskRaw) {
+        console.log('[Coordinator] Finish-rejected recovery cancelled: session/tab/task changed');
+        return;
+      }
+      if (this.state.continuationCount > MAX_TASK_CONTINUATIONS) {
+        console.log('[Coordinator] Finish-rejected recovery: continuation limit reached');
+        return;
+      }
+      console.log('[Coordinator] Finish-rejected recovery starting:', {
+        step: nextStep,
+        reason: 'finish-rejected',
+      });
+      const continuationPayload: UserTaskPayload = { rawTask: taskRaw, tabId };
+      const noopResponse = (resp: unknown) => {
+        const r = resp as any;
+        if (r?.error) {
+          console.error('[Coordinator] Finish-recovery pipeline error:', r.error);
+        } else if (r?.ack) {
+          console.log('[Coordinator] Finish-recovery pipeline result:', {
+            executedActions: r.executedActions,
+            pipelineMs: r.pipelineMs,
+            continuation: r.continuation,
+          });
+        }
+      };
+      this.handleUserTask(continuationPayload, noopResponse, true);
+    }, 100);
   }
 
   // ── Content script communication ─────────────────────────
