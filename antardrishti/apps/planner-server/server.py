@@ -70,6 +70,7 @@ class SceneNode(BaseModel):
     value: Optional[str] = None
     bbox: Optional[dict] = None
     actionability: Optional[str] = None
+    supportedActions: Optional[list[str]] = None
 
 class SceneCoverage(BaseModel):
     visualGrounding: str = "none"
@@ -658,6 +659,8 @@ class LLMPlanner(PlannerAdapter):
                 parts.append(f'name="{n.name}"')
             if n.actionability:
                 parts.append(f"action={n.actionability}")
+            if n.supportedActions:
+                parts.append(f"supportedActions=[{','.join(n.supportedActions)}]")
             if n.value:
                 parts.append(f"value={n.value[:30]}")
             nodes_desc.append(" ".join(parts))
@@ -700,14 +703,19 @@ RULES:
 - Each action MUST have "kind", "id", and "reason".
 - Actions targeting a DOM element MUST include "targetNodeId" matching a scene node id.
 - NEVER fabricate a targetNodeId. Use ONLY exact node IDs from the SCENE NODES list above.
+- CRITICAL: Each scene node has a "supportedActions" list. You MUST only propose an action whose kind appears in the target node's supportedActions. If a node does not list the action you want, find a different node that does.
 - For "type_text" and "type_token":
-  - targetNodeId MUST refer to a writable text control.
+  - targetNodeId MUST refer to a node whose supportedActions includes "type_text" or "type_token".
   - Prefer nodes with role "textbox", "searchbox", or "combobox".
   - The target must be an input field, textarea, or contenteditable element.
   - Do NOT target a button, link, heading, label, image, container, or generic text node.
-  - For search tasks, identify the actual search input field before emitting type_text.
-- For "click": target the element you want to activate (button, link, checkbox, etc.).
-- For "select": target a select/dropdown element only.
+  - For search tasks, identify the actual search input field (role=searchbox or textbox) before emitting type_text.
+  - NEVER target a generic wrapper or container div for type_text — find the actual input element.
+- For "click":
+  - target a node whose supportedActions includes "click".
+  - Prefer semantic controls (button, link, submit) over generic containers.
+  - When a submit button exists alongside a search input, use the submit button for search submission.
+- For "select": target a select/dropdown element whose supportedActions includes "select".
 - Do NOT repeat an action that already succeeded unless the fresh observation shows it needs to be done again.
 - If text was already entered successfully (TASK PROGRESS shows textEntered=true), prefer submitting/clicking instead of typing again.
 - Progress toward task completion — do not restart earlier steps that are already done.

@@ -441,6 +441,27 @@ export class Sanitizer {
       : node.visibleText ? 'readable' as const
       : 'unknown' as const;
 
+    // Derive planner-visible supportedActions from DOM affordances.
+    // Translate internal affordance names → planner action kinds.
+    const supportedActions: string[] = [];
+    if (affordances.includes('type')) {
+      supportedActions.push('type_text', 'type_token');
+    }
+    if (affordances.includes('click') || node.role === 'button' || node.role === 'link') {
+      supportedActions.push('click');
+    }
+    if (affordances.includes('select') || node.role === 'combobox') {
+      supportedActions.push('select');
+    }
+    if (affordances.includes('focus') || affordances.includes('type')) {
+      if (!supportedActions.includes('focus')) {
+        supportedActions.push('focus');
+      }
+    }
+    if (affordances.includes('scroll')) {
+      supportedActions.push('scroll');
+    }
+
     // Only include 'value' in planner-visible output when it IS a vault token.
     // Plaintext visible text (labels, button names) is exposed via 'name', never 'value'.
     // This prevents the egress verifier from flagging non-sensitive values.
@@ -459,6 +480,7 @@ export class Sanitizer {
         height: node.bbox.h,
       } : undefined,
       actionability,
+      supportedActions: supportedActions.length > 0 ? supportedActions : undefined,
     };
   }
 

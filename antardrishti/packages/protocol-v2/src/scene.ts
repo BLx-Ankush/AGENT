@@ -30,6 +30,10 @@ export interface PlannerSceneNode {
     | 'readable'
     | 'non-actionable'
     | 'unknown';
+  /** Deterministic list of actions this target can accept, derived from DOM/a11y.
+   *  The planner MUST only propose actions listed here for this node.
+   *  e.g. ['type_text','type_token','click','focus'] for a searchbox */
+  supportedActions?: string[];
   state?: Record<string, boolean | number | string>;
 }
 

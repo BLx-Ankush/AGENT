@@ -136,9 +136,9 @@ def test_task_present():
 run_test("PC-10 -- task included in prompt", test_task_present)
 
 
-# Test 11: type_text writable text control constraint
+# Test 11: type_text supportedActions constraint
 def test_type_text_writable():
-    assert "writable text control" in prompt.lower()
+    assert "supportedactions" in prompt.lower() and "type_text" in prompt
 
 run_test("PC-11 -- type_text writable control constraint", test_type_text_writable)
 

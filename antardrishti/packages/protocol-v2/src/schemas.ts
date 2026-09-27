@@ -49,6 +49,7 @@ export const PlannerSceneNodeSchema = z.object({
       'readable', 'non-actionable', 'unknown',
     ])
     .optional(),
+  supportedActions: z.array(z.string()).optional(),
   state: z
     .record(z.union([z.boolean(), z.number(), z.string()]))
     .optional(),
