@@ -461,6 +461,9 @@ export class Sanitizer {
     if (affordances.includes('scroll')) {
       supportedActions.push('scroll');
     }
+    // Derive interactionRole from DOM/a11y context.
+    // Generic browser concepts only — no site-specific rules.
+    const interactionRole = this.deriveInteractionRole(node, affordances);
 
     // Only include 'value' in planner-visible output when it IS a vault token.
     // Plaintext visible text (labels, button names) is exposed via 'name', never 'value'.
@@ -481,7 +484,60 @@ export class Sanitizer {
       } : undefined,
       actionability,
       supportedActions: supportedActions.length > 0 ? supportedActions : undefined,
+      interactionRole,
     };
+  }
+
+  /**
+   * Derive semantic interactionRole from DOM/a11y metadata.
+   * Generic browser concepts only — no site-specific rules.
+   */
+  private deriveInteractionRole(
+    node: any,
+    affordances: string[],
+  ): 'search_input' | 'search_submit' | 'autocomplete_option' | 'form_input' | 'form_submit' | 'navigation_link' | 'button' | 'generic' {
+    const role = node.role || '';
+    const tag = node.tag || '';
+    const inputType = node.inputType || '';
+    const landmarkType = node.landmarkType || '';
+
+    // Search input: searchbox role or input[type=search]
+    if (role === 'searchbox' || inputType === 'search') {
+      return 'search_input';
+    }
+
+    // Search submit: submit button inside a search landmark or form with search input
+    if ((role === 'button' || inputType === 'submit') && landmarkType === 'search') {
+      return 'search_submit';
+    }
+
+    // Autocomplete option: listbox option or role=option inside a suggestion context
+    if (role === 'option' || role === 'listitem') {
+      // Options in suggestion dropdowns
+      return 'autocomplete_option';
+    }
+
+    // Form input: textbox/textarea in a form
+    if (role === 'textbox' && affordances.includes('type')) {
+      return 'form_input';
+    }
+
+    // Form submit: submit button or button in a form
+    if ((inputType === 'submit' || inputType === 'button') && role === 'button') {
+      return 'form_submit';
+    }
+
+    // Navigation link
+    if (role === 'link') {
+      return 'navigation_link';
+    }
+
+    // Button
+    if (role === 'button') {
+      return 'button';
+    }
+
+    return 'generic';
   }
 
   // ── Injection detection ──────────────────────────────────

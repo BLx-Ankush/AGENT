@@ -50,6 +50,11 @@ export const PlannerSceneNodeSchema = z.object({
     ])
     .optional(),
   supportedActions: z.array(z.string()).optional(),
+  interactionRole: z.enum([
+    'search_input', 'search_submit', 'autocomplete_option',
+    'form_input', 'form_submit', 'navigation_link',
+    'button', 'generic',
+  ]).optional(),
   state: z
     .record(z.union([z.boolean(), z.number(), z.string()]))
     .optional(),
@@ -115,6 +120,7 @@ const StateChangesSchema = z.object({
   documentChanged: z.boolean(),
   submitActionAttempted: z.boolean(),
   submitActionConfirmed: z.boolean(),
+  goalSatisfied: z.boolean(),
 }).strict();
 
 export const TaskProgressSchema = z.object({

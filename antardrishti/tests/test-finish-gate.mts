@@ -1,8 +1,9 @@
 /**
- * ANTARDRISHTI — Finish Completion Gate Tests (Hardened)
+ * ANTARDRISHTI — Finish Completion Gate Tests (Goal-Verified)
  *
- * Verifies the local finish gate requires post-submit evidence
- * (not just click success) before allowing search task completion.
+ * Verifies the local finish gate requires goalSatisfied=true
+ * for search task completion. Navigation/submission alone is
+ * NOT sufficient — goal verification must pass.
  *
  * Run: npx tsx tests/test-finish-gate.mts
  */
@@ -52,6 +53,7 @@ interface FinishGateContext {
   documentChanged: boolean;
   submitActionAttempted: boolean;
   submitActionConfirmed: boolean;
+  goalSatisfied: boolean;
 }
 
 interface FinishGateResult {
@@ -64,11 +66,11 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
     return { allowed: true, reason: 'generic-task-finish-allowed' };
   }
   if (ctx.taskIntent === 'search') {
-    if (ctx.navigationOccurred || ctx.documentChanged) {
-      return { allowed: true, reason: 'navigation-observed' };
+    if (ctx.goalSatisfied) {
+      return { allowed: true, reason: 'goal-satisfied' };
     }
-    if (ctx.submitActionConfirmed) {
-      return { allowed: true, reason: 'submit-action-confirmed' };
+    if (ctx.navigationOccurred || ctx.submitActionConfirmed) {
+      return { allowed: false, reason: 'goal-not-satisfied' };
     }
     if (ctx.submitActionAttempted) {
       return { allowed: false, reason: 'completion-not-established' };
@@ -83,7 +85,7 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
 
 const SUBMIT_ACTION_KINDS = new Set(['click', 'select']);
 
-console.log('\n🚫 ANTARDRISHTI — Finish Completion Gate Tests (Hardened)\n');
+console.log('\n🚫 ANTARDRISHTI — Finish Completion Gate Tests (Goal-Verified)\n');
 
 // ── FG-01: click executed but no post-action evidence → REJECT ──
 test('FG-01: click executed + no post-submit evidence → REJECT', () => {
@@ -94,13 +96,14 @@ test('FG-01: click executed + no post-submit evidence → REJECT', () => {
     documentChanged: false,
     submitActionAttempted: true,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, false);
   assert.equal(result.reason, 'completion-not-established');
 });
 
-// ── FG-02: click + genuine navigation → ALLOW ──
-test('FG-02: click + genuine navigation → ALLOW', () => {
+// ── FG-02: click + genuine navigation + goalSatisfied → ALLOW ──
+test('FG-02: click + genuine navigation + goalSatisfied → ALLOW', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
@@ -108,23 +111,25 @@ test('FG-02: click + genuine navigation → ALLOW', () => {
     documentChanged: true,
     submitActionAttempted: true,
     submitActionConfirmed: true,
+    goalSatisfied: true,
   });
   assert.equal(result.allowed, true);
-  assert.equal(result.reason, 'navigation-observed');
+  assert.equal(result.reason, 'goal-satisfied');
 });
 
-// ── FG-03: click + confirmed progression → ALLOW ──
-test('FG-03: click + confirmed without explicit navigation → ALLOW', () => {
+// ── FG-03: click + navigation but goal NOT satisfied → REJECT ──
+test('FG-03: click + navigation + goalSatisfied=false → REJECT', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
-    navigationOccurred: false,
-    documentChanged: false,
+    navigationOccurred: true,
+    documentChanged: true,
     submitActionAttempted: true,
     submitActionConfirmed: true,
+    goalSatisfied: false,
   });
-  assert.equal(result.allowed, true);
-  assert.equal(result.reason, 'submit-action-confirmed');
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, 'goal-not-satisfied');
 });
 
 // ── FG-04: finish after click without confirmation → REJECT ──
@@ -136,12 +141,13 @@ test('FG-04: finish after click without confirmation → REJECT', () => {
     documentChanged: false,
     submitActionAttempted: true,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, false);
 });
 
-// ── FG-05: finish after confirmed progression → ALLOW ──
-test('FG-05: finish after confirmed progression → ALLOW', () => {
+// ── FG-05: finish after confirmed + goalSatisfied → ALLOW ──
+test('FG-05: finish after confirmed progression + goalSatisfied → ALLOW', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
@@ -149,23 +155,24 @@ test('FG-05: finish after confirmed progression → ALLOW', () => {
     documentChanged: true,
     submitActionAttempted: true,
     submitActionConfirmed: true,
+    goalSatisfied: true,
   });
   assert.equal(result.allowed, true);
 });
 
-// ── FG-06: planner finish cannot override missing evidence ──
-test('FG-06: planner finish blocked when local evidence missing', () => {
-  // Even with submitActionAttempted=true, no confirmation = reject
+// ── FG-06: planner finish cannot override missing goal ──
+test('FG-06: planner finish blocked when goal not satisfied', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
-    navigationOccurred: false,
+    navigationOccurred: true,
     documentChanged: false,
     submitActionAttempted: true,
-    submitActionConfirmed: false,
+    submitActionConfirmed: true,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, 'completion-not-established');
+  assert.equal(result.reason, 'goal-not-satisfied');
 });
 
 // ── FG-07: non-search behavior unchanged ──
@@ -177,6 +184,7 @@ test('FG-07: generic task + finish → ALLOW (existing behavior)', () => {
     documentChanged: false,
     submitActionAttempted: false,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, true);
   assert.equal(result.reason, 'generic-task-finish-allowed');
@@ -191,6 +199,7 @@ test('FG-08: search + no text entered + finish → ALLOW', () => {
     documentChanged: false,
     submitActionAttempted: false,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, true);
   assert.equal(result.reason, 'no-text-entered-finish-allowed');
@@ -205,12 +214,13 @@ test('FG-09: type_text only (no submit) + finish → REJECT', () => {
     documentChanged: false,
     submitActionAttempted: false,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, false);
 });
 
-// ── FG-10: documentChanged only → ALLOW ──
-test('FG-10: documentChanged only → ALLOW', () => {
+// ── FG-10: documentChanged + goalSatisfied → ALLOW ──
+test('FG-10: documentChanged + goalSatisfied → ALLOW', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
@@ -218,9 +228,10 @@ test('FG-10: documentChanged only → ALLOW', () => {
     documentChanged: true,
     submitActionAttempted: false,
     submitActionConfirmed: false,
+    goalSatisfied: true,
   });
   assert.equal(result.allowed, true);
-  assert.equal(result.reason, 'navigation-observed');
+  assert.equal(result.reason, 'goal-satisfied');
 });
 
 // ── Task-intent classifier tests ──
@@ -278,7 +289,6 @@ test('FG-22: focus is NOT a submit-like action', () => {
 // ── End-to-end scenario: Amazon search sequence ──
 
 test('FG-23: full sequence — type_text → click → no nav → REJECT', () => {
-  // After type_text + click but no navigation
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
@@ -286,12 +296,12 @@ test('FG-23: full sequence — type_text → click → no nav → REJECT', () =>
     documentChanged: false,
     submitActionAttempted: true,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   });
   assert.equal(result.allowed, false);
 });
 
-test('FG-24: full sequence — type_text → click → nav → ALLOW', () => {
-  // After type_text + click + actual navigation
+test('FG-24: full sequence — type_text → click → nav + goal → ALLOW', () => {
   const result = validateFinish({
     taskIntent: 'search',
     textEntered: true,
@@ -299,6 +309,7 @@ test('FG-24: full sequence — type_text → click → nav → ALLOW', () => {
     documentChanged: true,
     submitActionAttempted: true,
     submitActionConfirmed: true,
+    goalSatisfied: true,
   });
   assert.equal(result.allowed, true);
 });

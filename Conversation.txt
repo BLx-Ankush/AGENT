@@ -1,0 +1,1433 @@
+there was a problem statement refering to AI agents in broswer in SIH 2026?
+
+Yes — there is a very specific SIH 2026 problem statement about AI agents operating inside browsers.
+
+🤖 SIH26171 — On-device Visual Perception for Light-weight Browser Agents
+
+View the full SIH26171 problem statement
+
+It is from ISRO (Indian Space Research Organisation) under the Software → Miscellaneous category.
+
+The core idea is essentially:
+
+Build a privacy-preserving AI vision/browser agent that can understand what is happening on a user's screen and perform browser actions, while preventing sensitive information from being sent to the cloud.
+
+The architecture they're asking for is particularly interesting:
+
+User's Browser
+→ Local vision model
+→ Understand screen/UI
+→ Detect sensitive information
+→ Redact PII/passwords/faces/etc.
+→ Send only sanitized context
+→ Cloud/server LLM/VLM reasons about task
+→ Returns action
+→ Local browser agent executes it
+
+The problem specifically mentions technologies such as WebGPU, WebAssembly, ONNX Runtime Web and Transformers.js for running lightweight models locally.
+
+What the agent actually does
+
+For example, imagine the user tells the agent:
+
+"Fill out this application form and submit it."
+
+The browser agent could:
+
+Visually inspect the current webpage.
+Understand where the fields/buttons are.
+Detect that some information is sensitive.
+Locally mask/redact things such as:
+passwords
+faces
+email addresses
+phone numbers
+financial information
+other PII
+Send the sanitized visual context to an LLM/VLM.
+Receive something like:
+click "Next"
+scroll down
+click Submit
+Execute that action locally in the browser.
+
+The SIH evaluation explicitly includes visual-context accuracy, PII detection, redaction precision, client-side resource utilization, and end-to-end latency.
+
+And this is important for what we discussed earlier
+
+This is very close to the browser-agent direction you've been exploring, but SIH has constrained it around privacy-preserving on-device visual perception rather than simply "build an AI browser agent."
+
+So if you're considering this PS for your SIH team, I would not approach it as:
+
+"Let's build another Browser Use / OpenAI Operator clone."
+
+I'd approach it as:
+
+"A privacy firewall + local visual perception layer for browser agents."
+
+That distinction could make a significant difference in how novel and defensible your solution is.
+
+Also, the current SIH 2026 dataset contains 226 problem statements, and this one is SIH26171.
+
+If you want, I can next break down SIH26171 from a judge's perspective — what exactly they expect you to build, what existing projects already solve, where the novelty gap is, and what a strong hackathon-winning architecture could look like.
+
+Pasted markdown(6).md
+File
+If you are stating these statements, you're required to do a deep research on the whole architecture i am giving to you, so that you have the full overview:
+Sat, Sep 5 at 10:43 PM
+Pasted markdown(7).md
+File
+i told claude to look through your finding:
+Sun, Sep 6 at 8:46 PM
+Research.md
+File
+You should dive deep in this,run all the required research and tell me how it looks
+SIH2025-IDEA-Presentation-Format (1).pptx.pdf
+PDF
+SIH2026-IDEA-Presentation-Format (1).pptx
+Presentation
+the next step for us should be PPT creation since i am required to present a PPT in the internal hackathon which i have at 16 sep, i'll share one of the winning team ppt(i am not sure though) and the ppt template in which we are required to make,do a proper deep  research and then put the contents and make a complete PPT, which i can directly use to show in the internal hackathon and then directly to SIH portal.
+
+Done. I used the SIH 2026 six-slide template structure and the deeper Research.md findings to create a complete presentation, then exported and visually checked the final six-page PDF. The supplied template explicitly caps the submission at six slides and requires the Idea, Technical Approach, Feasibility & Viability, Impact & Benefits, and Research & References sections; the separate instruction slide is excluded.
+
+The deck is built around the actual SIH26171 requirements and five evaluation weights: 25% visual-context accuracy, 20% PII detection, 20% redaction, 20% client resource utilization, and 15% end-to-end latency.
+
+I also incorporated the corrected research position rather than the obsolete “nobody has done this” framing: GUIGuard, CAPED, WebPII/WebRedact, Available but Invisible, CaMeL, etc. are acknowledged as related work, while the pitch focuses on the browser-native enforcement/scheduling/integration architecture.
+
+Files
+
+Download the PPTX - ANTARDRISHTI SIH 2026
+
+Download the submission-ready PDF - 6 slides
+
+One thing still needs your actual registration details before submission: Team ID and Registered Team Name are shown as placeholders because those details were not provided. Everything else is populated.
+
+The PDF has been rendered and visually checked page-by-page; it contains exactly 6 slides, as required.
+
+ANTARDRISHTI_SIH2026_IDEA_Presentation.pptx
+Presentation
+ANTARDRISHTI_SIH2026_IDEA_Presentation.pdf
+PDF
+
+You were right to question it. On rechecking the rendered Slide 3, I found that the previous version had several misleading connections:
+
+The risk-routing outputs were not clearly feeding back into the Unified Scene Graph.
+WebMCP appeared sequential with DOM/A11y, which incorrectly suggested DOM/A11y → WebMCP → Browser. They are actually alternative execution paths.
+The action-plan return path was visually confusing and crossed the architecture.
+The token vault relationship was not clearly shown as a local-only resolution path.
+The browser feedback loop needed to clearly return to local perception rather than look like part of the execution chain.
+Some connector directions were visually ambiguous.
+
+I rebuilt the lower execution flow and reverified the rendered slide so that the intended logic is now:
+
+Perception
+DOM + A11y + Screen → Event/Risk Router → Low/Medium/High perception → Unified Scene Graph
+
+Privacy
+Unified Scene Graph → Privacy Engine → Tokenize/Redact → Sanitized State → Egress Gate
+
+Remote reasoning
+Sanitized State → Cloud Reasoner → Action Plan
+
+Local execution
+Action Plan → Return to Local → Action Safety Gate → Execution Adapter → Real Browser
+
+with:
+
+Execution Adapter = DOM/A11y (default) OR WebMCP (optional)
+
+and:
+
+Local Token Vault → local token resolution
+
+plus:
+
+Real Browser changes → local re-evaluation
+
+Corrected Slide 3 deck
+
+Download ANTARDRISHTI — Slide 3 Flow-Corrected PPTX
+
+This is the version I would use over the earlier architecture versions. 
+
+ANTARDRISHTI_SIH2026_SIH_SUBMISSION_DECK_v6_REVERIFIED_FINAL.pptx
+Presentation
+not yet fixed, 
+explain why the action plan has a dotted line connected to local token vault, what is it telling
+is the small wording correctly placed
+is this part correct:
+if it is incorrect correct this whole slide to the actual flow
+Fri, Sep 11 at 11:41 AM
+Yoo,I have started with making a official ppt now,how's this 
+Currently,with you given ppt we have this
+Make the aspect ratio 1:1
+Edit
+I haven't yet created the space for it,but I would create a similar space as of this ppt
+See this ppt,and in a similar way give a short crisp for the problem component, I'll also give the description from the sih website:
+MIC Alumni
+SIH Login
+
+Slide One
+Problem Statements
+Total Problem Statements
+58
+Hardware
+
+182
+Software
+
+17
+Hardware Themes
+
+17
+Software Themes
+
+Show 
+10
+ entries
+Search:
+171
+S.No.	Organization	Problem Statement Title	Category	PS Number	Submitted Idea(s) Count	Theme	Deadline for Idea Submission
+171	Indian Space Research Organisation(ISRO)	On-device Visual Perception for Light-weight Browser Agents
+×
+
+Problem Statement Details
+Problem Statement ID	
+26171
+Problem Statement Title	
+On-device Visual Perception for Light-weight Browser Agents
+Description	
+Background AI agents are becoming omnipresent in the current era and can play an important role in our digital interactions. If an agentic AI pipeline has access to our visual context, screen states, they can assist users in complex workflows and automate many tasks. Most of the agentic AI pipelines are deployed on server side which limits the type to data that a user can share with it. It would open a new dimension of possibilities, if a local agent is deployed on user machine particularly browser which can eliminate the need to share the sensitive data with the server. Local system generally has fewer resources than server and is unable to host a full-fledged pipeline therefore only the non-sensitive data such as structure of the screen, application fields etc can be sent to server for processing.
+
+Modern browser APIs (such as WebGPU and WebAssembly) and local inference libraries (like ONNX Runtime Web and Transformers.js) have unlocked the ability to run lightweight machine learning models directly on the client. The aim is to bridge these two environments: leveraging the reasoning power of cloud or server based AI while strictly enforcing data privacy at the client side.
+
+Description Participants are required to build a privacy-preserving vision agent which runs on browser. This involves implementing a client-side architecture where a local Vision Transformer (ViT) or equivalent computer vision model 'reads' the user's screen and takes decision based on that. If it requires the visual context to be sent to server, it shall sanitize the sensitive/PII data using DOM tags or any other method, before any network request is made. It should dynamically detect and redact sensitive elements. For example, blurring faces, blacking out passwords, and masking PII etc. Only this anonymized, unidentifiable data should be transmitted to the central server which should be aware for this redaction scheme and can process data accordingly. The server will then process the sanitized context and return actionable commands for the browser agent to execute. Participants must balance the trade-offs between inference latency and the accuracy.
+
+Expected Solution A successful submission should include a working prototype consisting of client side extension and server that demonstrates the following:
+
+Client-side (extension/JS) running in popular browsers (chrome, Firefox) components:
+
+• Local Vision Processing: Implementation of a client-side vision model running in the browser (e.g., via WebGPU) that evaluates the current screen state.
+• Privacy Preserving Filter: A mechanism for sanitizing sensitive or personal visual data. This can be achieved through local bounding-box redaction, semantic obfuscation, masking etc. This should be clearly demonstrated.
+
+Server-side implementation components:
+
+• Server Side Integration: The transmission of the anonymized visual context to a centralized LLM/VLM, which successfully interprets the sanitized data and returns the response which may be processed data to be again ingested by local client or an UI action (e.g., 'click the submit button,' 'scroll down') that the local client executes.
+• Participants are free to use any offline deployable (open-source/open-weights) model on server side. During SIH they can use cloud hosted version of these. An end-to-end task assisting the user should be demonstrated.
+See this slide ,and see the how they have framed the problem 
+See this ppt,and then frame our proposed solution like the overview 
+Watching these ppt,you can see how they have added a visual illustration,create one for our idea
+Edit
+Fri, Sep 11 at 4:16 PM
+How's this 
+Isn't this good enough when viewed in full screen
+before you'd given me the list of models and software; how or which model would redact the sensitive data by blurring faces if dected, have i included anything, go through the research 
+next we have this slide i.e feasibility and viability, i have shared images where one contains what to be done in that slide, and two other images are reference of different ppt which you refer to and get the overview, and tell me how shall i build this slide for our PS
+this is my current slide overview, analyze how much space is left out, and then create a image of that size such that i am not required to crop or anything which will affect the image quality, since you suggested to add a visual
+Edit
+Edit
+Edit
+next we have this slide for Impact & Benefits, i have provided a reference of another project panel of the similar slide, see how it has used the combination of both illustrations and texts, and then lets create it for out idea
+Edit
+next we have this slide for Impact & Benefits, i have provided a reference of another project panel of the similar slide, see how it has used the combination of both illustrations and texts, and then lets create it for out idea
+ next we have research and analysis slide, go through the research md, see through all the required materials and then run a deep research on them, and give me what all should i add in this slide
+six divisons are not possible to show, hence create crisp 4 which can be included here, also include the paper links
+i am unable to get
+Fri, Sep 11 at 9:51 PM
+Implementation Plan.txt
+Document
+Now, go through the Implementation plan,is this achieveing our end goal as required to win the hackathon, DO a deep research on it
+
+Pasted markdown(8).md
+File
+see this:
+Sat, Sep 12 at 11:15 AM
+Implementation plan V2.txt
+Document
+Implementation Plan(1).txt
+Document
+Pasted markdown(9).md
+File
+these both were our implementation plan where we decided to go with V2 since it was more achievable, I am currently in antigravity where for starting the build it created its implementation plan for it, DO a deep research on it and tell me if its meeting all our requirements or not,
+a question from antigravity
+nextquestion
+i currently pushed all the changes to the repo:
+Sun, Sep 13 at 1:12 PM
+Pasted markdown(10).md
+File
+see this
+Pasted markdown(20260913-081215).md
+File
+Pasted markdown(20260913-111255).md
+File
+see through the plan now:
+this opened
+see
+i waited for few seconds
+see
+see
+see
+see this
+see
+i already have it without doing
+before clearing logs it had few thing in console but now after waiting after clearing the console its still like this
+go through
+i cleared the console and then pasted the command
+see this
+Mon, Sep 14 at 5:02 PM
+see
+watch this
+see is this the one 
+see this
+see 
+see
+see
+watch this
+see
+don't assume anything, go to the repository and check if there is error in this html since the panel sinze has increased from the previous time we opened but the wording are not yet rendered
+Yes. I checked the actual current repository code, not just the screenshot, and you were right to stop here.
+
+There is a real bug in ort-smoke-test.html / ort-smoke-test.js.
+
+Exact mismatch
+
+Your current HTML contains only:
+
+<div class="log" id="log"></div>
+<div class="summary" id="summary"></div>
+
+But the current ort-smoke-test.js expects these elements:
+
+#status
+#timing
+#s1
+#s2
+#s3
+#s4
+#s5
+#s6
+
+and does:
+
+document.getElementById('s' + stage)
+document.getElementById('status')
+document.getElementById('timing')
+
+Those elements do not exist in the HTML.
+
+So the blank large panel is explained directly by the code:
+
+HTML
+  ↓
+log + summary only
+
+JS
+  ↓
+tries to update s1...s6/status/timing
+  ↓
+elements don't exist
+  ↓
+setStage() returns silently
+  ↓
+setStatus() returns silently
+  ↓
+nothing rendered
+
+This is not an ONNX failure.
+
+Also, the current smoke test itself sends SMOKE_OFFSCREEN_TEST to the service worker, so its intended test flow is still valid.
+
+Give Antigravity this exact instruction
+PHASE 9 — SMOKE TEST UI BUG: HTML/JS CONTRACT MISMATCH
+
+I inspected the current repository.
+
+Current:
+
+apps/extension/ort-smoke-test.html
+
+contains only:
+
+<div class="log" id="log"></div>
+<div class="summary" id="summary"></div>
+
+But:
+
+apps/extension/ort-smoke-test.js
+
+expects:
+
+#status
+#timing
+#s1
+#s2
+#s3
+#s4
+#s5
+#s6
+
+through setStatus(), setTiming(), and setStage().
+
+Therefore the smoke test can execute but renders nothing because all
+getElementById() calls return null.
+
+The live screenshot confirms the resulting blank panel.
+
+DO NOT TOUCH:
+- ONNX Runtime
+- offscreen architecture
+- backend selection
+- WASM
+- perception
+- privacy
+- egress
+- fail-closed
+
+THIS IS ONLY A SMOKE-TEST UI CONTRACT FIX.
+
+==================================================
+1. FIX ort-smoke-test.html
+==================================================
+
+Make the HTML match the existing JavaScript contract.
+
+Add visible elements:
+
+#status
+#s1
+#s2
+#s3
+#s4
+#s5
+#s6
+#timing
+
+Keep:
+
+#log
+#summary
+
+Use the existing external CSS architecture.
+
+No inline JavaScript.
+No inline CSS.
+
+Example structure:
+
+<main>
+  <section class="status-card">
+    <div id="status" class="pending">Waiting...</div>
+    <div id="timing"></div>
+  </section>
+
+  <section class="stages">
+    <div id="s1" class="pending">S1: Pending</div>
+    <div id="s2" class="pending">S2: Pending</div>
+    <div id="s3" class="pending">S3: Pending</div>
+    <div id="s4" class="pending">S4: Pending</div>
+    <div id="s5" class="pending">S5: Pending</div>
+    <div id="s6" class="pending">S6: Pending</div>
+  </section>
+
+  <div class="log" id="log"></div>
+  <div class="summary" id="summary"></div>
+</main>
+
+Use sensible semantic HTML and preserve the existing visual style.
+
+==================================================
+2. VERIFY JAVASCRIPT CONTRACT
+==================================================
+
+Do not rewrite ort-smoke-test.js unless necessary.
+
+Its current contract is:
+
+setStage(stage, text, ok)
+→ #s1...#s6
+
+setStatus(text, ok)
+→ #status
+
+setTiming(text)
+→ #timing
+
+Make sure every referenced element exists.
+
+==================================================
+3. DO NOT FAKE RESULTS
+==================================================
+
+The UI must only display PASS after the actual service-worker result
+has returned.
+
+S1-S6 must remain driven by the real values returned from
+SMOKE_OFFSCREEN_TEST.
+
+Do not hardcode PASS.
+
+==================================================
+4. VERIFY SMOKE TEST LOGIC
+
+Current intended flow:
+
+Smoke page
+→ SMOKE_OFFSCREEN_TEST
+→ service worker
+→ ensure offscreen
+→ OFFSCREEN_READY
+→ INFERENCE_INIT
+→ INFERENCE_INIT_RESULT
+→ INFERENCE_RUN
+→ real face-detector inference
+→ INFERENCE_RESULT
+→ smoke page
+→ render S1-S6
+
+Preserve this.
+
+==================================================
+5. IMPROVE ERROR VISIBILITY
+
+If the SW call fails, the page must visibly show the error.
+
+Do not silently fail because an element is missing.
+
+At minimum:
+
+status = FAILED
+summary/log = actual error message
+
+==================================================
+6. BUILD
+
+Run:
+
+npm run build
+
+Verify dist/chrome contains:
+
+ort-smoke-test.html
+ort-smoke-test.js
+ort-smoke-test.css
+
+==================================================
+7. LIVE TEST
+
+Reload the Chrome extension.
+
+Open:
+
+chrome-extension://<id>/ort-smoke-test.html
+
+The page must visibly render all six stages.
+
+Expected:
+
+S1 PASS — Offscreen document created
+S2 PASS — Offscreen READY received
+S3 PASS — ORT initialized
+S4 PASS — face-detector session / backend=wasm
+S5 PASS — real inference + latency
+S6 PASS — result returned
+
+And a final:
+
+ALL PASS — Offscreen inference working
+
+==================================================
+8. IMPORTANT
+
+The screenshot showed the blank UI because the HTML and JS have
+different element contracts.
+
+Fix the DOM contract only.
+
+Do not touch working runtime code.
+
+After implementation, report:
+- exact HTML elements added
+- build result
+- live smoke-test result
+One more thing
+
+The screenshot's larger panel is not evidence that the test is running. It is simply the current CSS/layout being rendered while the JS has nowhere to put its output.
+
+So don't proceed to SecureBank yet.
+
+Fix this UI contract first. Then open the smoke test again and we should finally get the six actual results on screen.
+
+see these
+watch this
+watch this
+
+Yes — the smoke test itself has now passed S1–S6, so the offscreen inference path is live:
+
+S1: Offscreen document created ✅
+S2: READY received ✅
+S3: ORT initialized ✅
+S4: Face detector session, backend=wasm ✅
+S5: Real inference executed ✅
+S6: Result returned ✅
+
+And the source confirms S5 is based on an actual returned inference result, not a hardcoded PASS.
+
+But do NOT freeze the timing numbers yet
+
+The screenshot shows:
+
+transferDecodeMs=0
+inferenceMs=0
+totalMs=1142.7ms
+
+That is suspicious. I checked the current coordinator implementation, and the smoke-test response currently computes:
+
+transferDecodeMs: 0
+inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? 0
+totalMs: initMs
+
+So the displayed 0 ms values can arise from the instrumentation returning no per-inference metric, while totalMs is actually the model initialization time. That means S5 passes functionally, but these displayed timings are not yet trustworthy as benchmark evidence.
+
+Therefore our next step
+
+Do not run the 30-run benchmark yet.
+
+First, have Antigravity verify/fix the smoke-test timing instrumentation so that:
+
+transferDecodeMs > 0
+inferenceMs > 0
+totalMs = transfer/decode + actual inference + message/result overhead
+
+and the service-worker console independently logs the same measured inference duration.
+
+Give Antigravity:
+
+PHASE 9 — FINAL TIMING INSTRUMENTATION AUDIT
+
+The live smoke test now passes S1-S6.
+
+However, the displayed timing is:
+
+transferDecodeMs=0
+inferenceMs=0
+totalMs=1142.7ms
+
+I inspected the current code. The smoke response currently uses:
+
+transferDecodeMs: 0
+inferenceMs: inferenceResult?.metrics?.[0]?.durationMs ?? 0
+totalMs: initMs
+
+Therefore the smoke test is proving inference occurred, but the timing
+fields are not yet reliable benchmark measurements.
+
+DO NOT change the inference architecture.
+DO NOT change models.
+DO NOT change privacy/egress.
+DO NOT introduce fake timing.
+
+Fix ONLY the timing instrumentation.
+
+Requirements:
+
+1. Measure PNG decode time inside offscreen runtime.
+2. Measure actual face-detector session.run() inference time.
+3. Measure total SMOKE_OFFSCREEN_TEST wall-clock time separately.
+4. Return all three actual measurements.
+5. Log the same values in the offscreen console and service-worker
+   console.
+6. Do not use model initialization time as inference time.
+7. If a metric is unavailable, fail the smoke test instead of
+   reporting 0.
+
+Expected:
+
+S5: Inference: <actual>ms (decode=<actual>ms)
+Timing:
+transferDecodeMs=<actual>
+inferenceMs=<actual>
+totalMs=<actual>
+
+Add a regression test proving inferenceMs cannot silently become 0
+when real session.run() executes.
+
+Then rebuild and rerun S1-S6.
+
+STOP after timing is corrected.
+
+Once that produces credible non-zero timings, then we start the actual 30-run Chrome + WASM benchmark.
+
+watch this
+watch 
+see through
+run 1
+run 2
+run 3
+run 4
+run 5
+6
+7
+8
+9
+10
+11
+12
+13
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+final 30
+provide the test results of what we done,and also give me the whole workflow of our system Antardhristi like this one(its of another project)
+see through
+Pasted code.ts
+TypeScript
+see
+Pasted code(1).ts
+TypeScript
+go through once again with the whole code such that you can clearly verify the sanitizer to planner flow
+in planner which codes you want me to go through
+in planner which codes you want me to go through
+under egress-verifier what do you require
+Pasted code(2).ts
+TypeScript
+first
+Pasted code(3).ts
+TypeScript
+its better if you go through the whole code file, to prevent any flaws
+which do you want
+Pasted code(4).ts
+TypeScript
+it shows no result, but go through the file
+Pasted code(5).ts
+TypeScript
+see
+Pasted markdown(20260918-133447).md
+File
+For Prompt 0 this is been given by antigravity:
+Friday 11:32 PM
+my team mates are panicking about a senior team who is working on the same PS
+
+Don’t let the poster alone trigger panic. I looked at it closely.
+
+Yes, there is substantial surface-level overlap with what we are building: on-device perception, browser screenshots/DOM, local PII detection/redaction, sanitized payload to a cloud VLM, and browser-agent execution.
+
+But the important question is what is actually implemented and how deeply the two systems solve the problem.
+
+Where their poster appears to stop
+
+Their visible pipeline is essentially:
+
+DOM heuristics → on-device detection → redaction/masking → frame optimization → VLM reasoning → structured action plan → browser executor
+
+That is a legitimate implementation direction, but it is a fairly direct interpretation of the PS.
+
+Where your system has a materially different architecture
+
+Your implementation has a much stronger privacy-control-plane concept:
+
+Browser capture → local multimodal perception → unified scene graph → privacy classification → tokenization/local vault → sanitized state → independent egress verification → cloud reasoning → action validation → local authorization/confirmation → exact target execution → outcome verification/re-observation
+
+The important differentiators are not the words "PII detection" or "on-device vision." Those are expected in this PS.
+
+Your defensible differentiators are:
+
+1. Privacy firewall / fail-closed egress
+
+The cloud doesn't merely receive a redacted screenshot. Every outbound payload goes through an independent verifier that can reject transmission.
+
+2. Tokenized private-data architecture
+
+Instead of simply deleting private information, your system can represent it as things like:
+
+<EMAIL_01>
+<PHONE_02>
+<SECRET_01>
+
+and resolve the real value locally at execution time through the token vault.
+
+3. Exact target identity
+
+Your P0-B work specifically addresses the dangerous problem of:
+
+"The agent observed one element, but the executor acts on another."
+
+The harvested DOM element is mapped directly to the execution registry rather than reconstructing the target independently.
+
+4. Authorization before execution
+
+Your architecture treats:
+
+observation → target identity → binding → authorization → confirmation → execution
+
+as a security chain, rather than just letting the agent produce an action plan.
+
+5. Event/risk-aware perception
+
+You are not proposing expensive vision inference on every browser frame. The scheduler decides whether perception is needed and escalates from:
+
+DOM/A11y → lightweight CV/OCR → heavier local vision
+
+based on risk.
+
+6. Visual + structural unified representation
+
+DOM tells you what structurally exists; vision tells you what the user actually sees. That matters for things like canvas/WebGL, rendered documents, images, revealed secrets, etc.
+
+The biggest mistake your team can make now
+
+Do not try to beat the senior team by adding random features.
+
+That creates a bloated project and weakens the demo.
+
+Instead, make your core story extremely clear:
+
+“We are not merely redacting screenshots. We are building a privacy control plane between the browser and the AI agent.”
+
+Then demonstrate something that makes that architecture obvious.
+
+For example:
+
+Private value exists visually → local perception detects it → it becomes <SECRET_01> → cloud receives only sanitized representation → agent decides an action → local vault resolves the secret → action executes only after authorization.
+
+That is much more compelling than simply showing a red rectangle over PII.
+
+And about them being seniors
+
+Their year of study is essentially irrelevant to the technical question the jury will evaluate.
+
+A senior team can have a polished poster and still have a simpler implementation. A junior team can have a technically deeper system. The jury ultimately gets to see the working prototype, architecture, engineering decisions, and evidence.
+
+So I would tell your teammates:
+
+“We are not competing against their poster. We are competing on what our system can demonstrably do.”
+
+And from everything we've already built, there is enough architectural depth to make the two projects visibly distinguishable, provided the final demo actually proves those mechanisms rather than merely describing them.
+
+The one thing I would take seriously is this: because their poster overlaps so heavily, your final presentation needs to make the architectural distinction immediately obvious. Don't let the jury think both projects are simply “OCR + PII redaction + VLM.”
+
+From the poster alone, FastAPI is not explicitly shown as a separate architectural block.
+
+But based on the architecture they depict, FastAPI would most likely sit as the local/backend API layer between the browser-side system and the VLM/model services:
+
+Browser Extension
+      │
+      │ sanitized payload
+      ▼
+   FastAPI
+      │
+      ├── PII / perception services
+      ├── VLM inference
+      └── action-planning logic
+      │
+      ▼
+ Structured JSON action
+      │
+      ▼
+Browser Executor
+
+So FastAPI's role is primarily orchestration/serving, not the privacy mechanism itself.
+
+For example:
+
+POST /analyze
+{
+  "sanitized_screen": "...",
+  "dom": "..."
+}
+
+FastAPI receives that request, invokes their model pipeline, and returns something like:
+
+{
+  "action": "click",
+  "target": "button_3"
+}
+
+The important distinction for your team is:
+
+FastAPI is a web server/API framework. It does not itself provide on-device perception, PII detection, privacy guarantees, or browser-agent security.
+
+So don't treat “they use FastAPI” as a technical differentiator. The real question is where their inference runs and what crosses the FastAPI boundary.
+
+That boundary is actually worth investigating, because if their browser sends screenshots/data to a FastAPI server for processing, that is architecturally very different from your local perception → privacy gate → sanitized egress model.
+
+SIH2026-PS171-Honoured Ones (1).pptx
+Presentation
+until that time, i want you to reverify our SIH 2026 PPT once, and tell me if i need to being any chnages:
+
+I reviewed all 6 slides, including the rendered visuals and the actual text. The deck is good in structure and concept, but I would make a few changes before using it for the Grand Finale. The biggest issue is not design; it is technical accuracy and evidence positioning.
+
+1. Slide 1 — fix the obvious metadata
+
+The slide currently has:
+
+Problem Statement ID – SIH2026171
+Team ID – blank
+
+Change:
+
+Fill the Team ID.
+Verify the PS ID against the official SIH portal before final export. Do not risk a typo in the identifier.
+2. Slide 2 — strong, but soften one claim
+
+The problem statement currently says:
+
+“Current AI browser agents rely on server-side reasoning, forcing sensitive screen data to leave the user's device.”
+
+That is too absolute.
+
+Use:
+
+“Many screenshot-driven AI browser agents send sensitive screen context to remote models for reasoning.”
+
+This is harder for a jury to challenge.
+
+Everything else on this slide is aligned very well with our actual thesis: browser-native privacy firewall, local perception, sanitization, remote reasoning, local execution.
+
+3. Slide 3 — this needs the most important technical correction
+
+Your software list currently contains:
+
+Python backend + LLM/VLM
+
+I would remove “Python backend.”
+
+Our actual architecture is better represented as:
+
+Remote LLM/VLM endpoint + HTTPS planner transport
+
+because the important architectural fact is that the browser extension performs the local privacy/perception work and then sends the sanitized, verified state to the remote planner. The backend framework itself is not part of our differentiating architecture.
+
+So replace:
+
+Python backend + LLM/VLM
+
+with:
+
+Remote LLM/VLM endpoint
+(HTTPS planner transport)
+Also: be careful with the model list
+
+The slide says:
+
+Florence-2-base: grounding & OCR
+MediaPipe: face detection
+DBNet/PaddleOCR + GLiNER: text/PII detection
+
+Only list a model as implemented/used in the live prototype if it is actually loaded and executed in your current build.
+
+For anything not currently part of the demonstrated pipeline, label it:
+
+Optional / planned
+
+This will protect you from the classic jury question:
+
+“Show me where this model is actually running.”
+
+4. Slide 3 — the architecture is excellent, but visually overloaded
+
+The central diagram is actually the strongest slide in the deck.
+
+The sequence:
+
+DOM / A11Y / SCREEN
+      ↓
+EVENT + RISK ROUTER
+      ↓
+UNIFIED SCENE GRAPH
+      ↓
+PRIVACY ENGINE
+      ↓
+TOKENIZE + REDACT
+      ↓
+SANITIZED STATE
+      ↓
+EGRESS GATE
+      ↓
+CLOUD REASONER
+      ↓
+ACTION PLAN
+      ↓
+ACTION SAFETY GATE
+      ↓
+LOCAL EXECUTION
+
+is excellent and communicates the core idea.
+
+However, the left-side technology list plus the detailed diagram makes this slide very dense.
+
+For the final version, I would remove Transformers.js and any other framework that is not essential to the demonstrated build, unless it is genuinely used.
+
+Your jury should remember:
+
+Local perception → privacy boundary → verified egress → remote reasoning → local safe execution
+
+not a list of libraries.
+
+5. Slide 4 — good, but change one claim
+
+The technical-feasibility section is strong:
+
+Browser-native execution
+Event-driven + ROI inference
+Local PII/face detection
+Fail-closed security
+
+Keep this.
+
+But the environmental claim on the next slide says:
+
+“Local lightweight inference reduces unnecessary cloud processing and energy usage.”
+
+That is plausible, but you aren't presenting an energy measurement.
+
+Change it to something safer:
+
+“Reduces unnecessary cloud-side visual processing and data transmission.”
+
+That's directly connected to the architecture and doesn't invite:
+
+“Where is your energy benchmark?”
+
+6. Slide 5 — this should be changed substantially
+
+This is currently your weakest slide technically.
+
+The table compares:
+
+Visual context accuracy → Cloud/desktop GUI agents vs Local multimodal scene understanding
+PII precision & recall → WebRedact vs Multi-stage local detection
+Redaction precision → Existing visual redactors vs Policy-controlled redaction
+Client resource usage → Host/cloud processing vs Browser WebGPU/WASM
+E2E latency → Screenshot → cloud → action vs Event-driven local → sanitized → cloud → action
+
+The problem is that these are not actual measured results. They are capabilities/architecture differences presented under “Evaluation Metric.”
+
+A jury could immediately ask:
+
+“What is your measured precision?”
+“How much latency?”
+“How much resource reduction?”
+
+I recommend changing the table title to:
+
+Evaluation Metrics
+
+and changing the columns to:
+
+Metric	What we measure
+PII recall	Missed sensitive regions
+Privacy leakage	Raw PII reaching egress
+Redaction IoU	Detection/redaction coverage
+Vision invocations	Expensive model calls/session
+Local inference latency	Browser-side processing
+E2E latency	Screen → sanitized state → action
+Cloud payload	Bytes/tokens transmitted
+
+Then, during the finale, populate it with your actual measurements.
+
+This aligns much better with the benchmark methodology we've already been using.
+
+7. Slide 6 — good research positioning, but add source visibility
+
+The research slide is conceptually good.
+
+It identifies the problem that:
+
+DOM-only perception misses canvas, images, video, PDFs, iframes and visual overlays, while privacy protection must preserve task-relevant visual context.
+
+And it positions GUIGuard, PrivWeb, CAPED and WebPII/WebRedact as related work.
+
+The published numbers are useful:
+
+WebRedact: 0.753 mAP@50 at ~20 ms CPU
+CAPED: seeded leakage 0.766 → 0.268
+Sema: 130–210× lower screenshot uplink, ≤0.7 pp accuracy loss
+
+But on the actual slide, the references are tiny / unclear.
+
+Add a compact footer:
+
+Sources: GUIGuard, WebRedact, CAPED, Sema, PrivWeb — see references/QR.
+
+That makes the research look much more defensible.
+
+8. One thing I would NOT put into this PPT yet: Jev
+
+Since we just discussed Jev, do not add it to this deck yet.
+
+Your current PPT describes an architecture that is already implemented and defensible.
+
+Jev should enter only after we have a measured experiment showing:
+
+without Jev
+vs
+with Jev
+
+and can demonstrate something concrete such as:
+
+“Reduced expensive local-model invocations by X% while maintaining Y% privacy recall.”
+
+Until then, adding it makes the deck look speculative.
+
+Final change list
+Must change
+Fill Team ID.
+Replace “Python backend + LLM/VLM” with “Remote LLM/VLM endpoint (HTTPS planner transport)”.
+Ensure every listed model is actually present in the demonstrated build; mark non-live models optional/planned.
+Rework Slide 5 from capability comparison into actual evaluation metrics.
+Add visible references to Slide 6.
+Soften the absolute claim about current browser agents on Slide 2.
+Remove/soften the unmeasured environmental/energy claim.
+Should change
+
+Simplify Slide 3's technology list so the architecture dominates the slide rather than the framework names.
+
+Keep
+
+The central message:
+
+Browser-native privacy firewall for AI agents.
+
+And especially the architectural statement:
+
+“RAW PRIVATE PIXELS + VALUES NEVER CROSS THE BOUNDARY.”
+
+That is one of the clearest one-line explanations of what makes Antardrishti distinct.
+
+Overall: the deck does not need a redesign. It needs technical tightening and evidence discipline. The architecture itself is already the strongest part.
+P1-G FINAL REPORT
+
+Commit SHA: 45ed734
+
+Files changed:
+
+image
+
+coordinator.ts — _invalidatedObservationId field, stale-observation check after capture, observation invalidation after state-changing action, reset on session end (+39 lines)
+
+image
+
+test-reobservation.mts — 27 adversarial tests (new, 520 lines)
+
+Exact invariant closed: No state-changing action can execute twice from the same observation after the first state-changing action succeeds. When a state-changing action completes, its observationId is recorded as invalidated. Any subsequent pipeline that captures the same observationId (e.g. due to cache race or replay) is rejected at capture time with a deterministic P1-G: observation already consumed error. The invalidation resets on session end, allowing new sessions to start fresh.
+
+Targeted tests: 27/27 passed
+
+RG-01: fresh observation → action succeeds
+RG-02 (3): invalidation marks observation stale
+RG-03 (2): stale observation/plan rejected
+RG-04 (2): new observation with distinct ID succeeds
+RG-05: old fingerprint vs new observation → mismatch
+RG-06: tab activation does NOT create new observation
+RG-07: DOM mutation + stale plan reuse → rejected
+RG-08: planner reuse from same observation → zero execution
+RG-09: type_token stale-plan → zero redemption
+RG-10 (4): non-state-changing batching preserved
+RG-11 (3): P1-C observationId/documentGeneration intact
+RG-12 (2): P1-F session/tab binding intact
+RG-EX (4): complete lifecycle sequences
+
+Full regression: 571/571 (0 failures)
+
+Chrome build: ✅ Clean
+
+Firefox build: ✅ Clean
+
+npm audit: 0 vulnerabilities
+
+Remaining caveat: None.
+
+I inspected 45ed734 directly. There is one real P1-G defect left, so I would not close P1-G yet.
+
+The issue
+
+The implementation stores only:
+
+_invalidatedObservationId: string | null
+
+That means it remembers only the most recently consumed observation.
+
+The commit's own test confirms this:
+
+OBS_N  → invalidated
+OBS_N1 → invalidated
+
+OBS_N  → isObservationStale() === false
+OBS_N1 → isObservationStale() === true
+
+So an old observation can become reusable after a later observation is invalidated. That's contrary to the stronger invariant:
+
+An observation that authorized a state-changing action becomes permanently invalidated for the lifetime of that session.
+
+This is especially relevant to replay/caching attacks:
+
+OBS_N
+  ↓
+ACTION_A
+  ↓
+OBS_N invalidated
+
+OBS_N1
+  ↓
+ACTION_B
+  ↓
+OBS_N1 invalidated
+
+attacker replays OBS_N
+  ↓
+single-ID tracker no longer remembers OBS_N
+
+The existing checkActionFreshness() may reject some replay paths, but P1-G's own observation lifecycle gate no longer guarantees permanent invalidation of OBS_N.
+
+Fix
+
+This is a small micro-fix, not a redesign.
+
+Use a session-scoped set:
+
+_invalidatedObservationIds: Set<string>
+
+Then:
+
+after successful state-changing action
+    → add(observationId)
+
+new capture
+    → if set.has(observationId)
+       reject
+
+Clear the set on endSession().
+
+Also add one important regression:
+
+OBS_N → state change → invalidate N
+OBS_N1 → state change → invalidate N1
+replay OBS_N → MUST STILL REJECT
+Give Antigravity this exact micro-fix
+P1-G MICRO-FIX — PERMANENT OBSERVATION INVALIDATION
+Baseline: 45ed734
+Scope: P1-G ONLY.
+
+Do NOT reopen P0-A, P0-B, P1-C, P1-D, P1-E, P1-F.
+Do NOT redesign the observation pipeline.
+
+BUG FOUND
+
+Current implementation stores only:
+
+  _invalidatedObservationId: string | null
+
+Therefore only the MOST RECENT invalidated observation is remembered.
+
+Example:
+  OBS_N → state change → invalidated
+  OBS_N1 → state change → invalidated
+
+After that, OBS_N is no longer marked stale by the P1-G lifecycle
+tracker and could potentially be replayed through a cache/replay path.
+
+REQUIRED INVARIANT
+
+Every observation that has authorized a state-changing action MUST remain
+invalidated for the ENTIRE lifetime of the current session.
+
+Not only the latest observation.
+
+REQUIRED FIX
+
+Replace the single:
+
+  _invalidatedObservationId: string | null
+
+with a session-scoped collection, preferably:
+
+  _invalidatedObservationIds: Set<string>
+
+Rules:
+
+1. After each successfully executed state-changing action:
+   _invalidatedObservationIds.add(captureResult.observationId)
+
+2. After capture:
+   if (_invalidatedObservationIds.has(captureResult.observationId))
+   → reject with deterministic P1-G stale-observation error.
+
+3. On session end:
+   _invalidatedObservationIds.clear()
+
+4. New session starts with an empty set.
+
+5. Preserve existing capture.invalidateCache() behavior.
+
+6. Do not weaken existing observationId/documentGeneration/fingerprint
+   freshness checks.
+
+MEMORY / SCOPE
+
+Observation IDs are session-local.
+Do not persist this set across browser restarts unless the existing
+session model already requires persistence.
+Keep the implementation bounded to the active session's observations.
+
+REQUIRED ADVERSARIAL TESTS
+
+RG-P-01:
+OBS_N → state-changing action → OBS_N permanently invalidated.
+
+RG-P-02:
+OBS_N → invalidate
+OBS_N1 → invalidate
+replay OBS_N → MUST STILL reject.
+
+RG-P-03:
+OBS_N → invalidate
+OBS_N1 → invalidate
+replay OBS_N1 → MUST reject.
+
+RG-P-04:
+OBS_N → invalidate
+OBS_N1 → new observation → allowed.
+
+RG-P-05:
+multiple sequential observations all become permanently invalid once
+each authorizes a state-changing action.
+
+RG-P-06:
+session end clears invalidation set.
+
+RG-P-07:
+new session after end can use a fresh observation normally.
+
+RG-P-08:
+type_token replay from any previously invalidated observation → zero
+token redemption.
+
+RG-P-09:
+existing P1-C observation/document-generation/fingerprint checks remain.
+
+RG-P-10:
+existing P1-F session/tab binding remains.
+
+TEST QUALITY
+
+Exercise the actual production lifecycle logic where practical.
+Do not merely duplicate the intended Set behavior in a standalone
+simulation.
+
+VALIDATION
+
+Run:
+1. targeted P1-G tests
+2. ONE full regression
+3. Chrome build/smoke
+4. Firefox build/smoke
+5. npm audit
+
+Do NOT repeatedly run the full suite.
+
+COMMIT
+
+P1-G: persist invalidated observations for session
+
+FINAL REPORT ONLY:
+- commit SHA
+- files changed
+- invariant closed
+- targeted test count/results
+- full regression count/result
+- Chrome
+- Firefox
+- npm audit
+- remaining caveat
+
+After this micro-fix, P1-G should be genuinely closed, assuming the old-observation replay tests pass.
+
+this is where i have to stop you now:because see this evaluvation criteria
+slide 1
+Edit
+lets move on to the next slide:
+Edit
+Sunday 8:52 PM
+currently i have did this much, what else should i add , i have also shared a checklist i got
+I want you to make sure that what innovations we are stating are strong and is what we are doing, based on that recreate this make it more presentable and not too plain, make sure the size measurement is as same of the image being provided to you 
+Edit
+recreate this image using the details been given now
+Edit
+Edit
+@
+Figma
+ make this in editable format
+rate-limits-access.md
+File
+Stopped talking to Figma
+are these target users good enough
+IS SLIDE 2 now good to go
+see
+see now
+is the key innovations strong here in this slide
+Edit
+the image sent is exactly how much space i have in my ppt slide now, and i want to add how unique our solution is than current existing and also its target users, create a image for that make sure its resolution is at its highest
+Edit
+Monday 10:48 PM
+tell me one important, what is our system doing when data fails to pass through the egress state because of the detection that data is not properly sanitized
+i am actually building a mermaid based flowchart and that flow we discussed is missing, therefore go through the ppt architecture i have sent and tell the gaps it has such that you mention the missing flow one by one
+see these three
+similar question for action safety gate, what is our system doing, is the action plan being validated such that if conatins any malicious prompt it how it handles
+okay just tell me if anything is missing in this if yes tell me what all should be added to it
+Yesterday 6:33 PM
+can we now lock this for slide 2 solution proposed
+lets start with third slide now then
+i have a black component for adding the github link on it, tell me how it is and for the link component what/how shall i present in it
+
+I reviewed the pushed code on the current main branch. The implementation itself looks correct, and the production coordinator now enforces the intended invariant: a failed executeAction() returns {executed:false}, the action is not counted, the observation is not invalidated, and the pipeline stops. Coordinator execution handling
+
+There is, however, one thing I would not mark fully closed yet:
+
+The 22 new tests are mostly simulation-level
+
+test-execution-outcome.mts defines its own simulateExecutionLoop() and a local ExecutionResult type, then tests that simulation. It does not directly invoke the production Coordinator.executeAction() or the actual production execution loop. Execution outcome tests
+
+That's important because your instruction explicitly asked for:
+
+tests that exercise the real production execution semantics.
+
+So I would make one small follow-up before moving on:
+
+Add a small number of production-path tests that inject/mock chrome.tabs.sendMessage and invoke the actual coordinator execution method/loop, proving that real success:false, thrown exceptions, token-delivery failure, and successful execution produce the expected production state changes.
+
+You don't need another 22 tests. 4–6 true production-path tests are more valuable than 22 simulations.
+
+After that
+
+Your next task should be target-context/high-risk confirmation wiring, exactly as we identified earlier:
+
+Pay Now / Send / Delete / Upload / Submit
+                ↓
+       targetContext
+                ↓
+      Action Safety Gate
+                ↓
+      confirmation required
+
+Then you're ready for the first real Chrome golden-path test.
+
+So I would mark the current commit as:
+
+Implementation: ✅
+Regression: ✅ 681/681
+Production-path test evidence: ⚠️ one small gap remaining
+Next engineering task: production execution tests, then high-risk confirmation context.

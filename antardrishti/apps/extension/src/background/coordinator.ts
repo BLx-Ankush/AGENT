@@ -145,6 +145,8 @@ interface FinishGateContext {
   submitActionAttempted: boolean;
   /** Whether post-submit evidence confirms task progression */
   submitActionConfirmed: boolean;
+  /** Whether local goal verification confirms the task objective was met */
+  goalSatisfied: boolean;
 }
 
 interface FinishGateResult {
@@ -157,8 +159,10 @@ interface FinishGateResult {
  * This is a LOCAL gate — it does not override P1-I, freshness, or execution authority.
  * It prevents premature task termination when local evidence does not support completion.
  *
- * For search tasks, click/select execution alone is NOT sufficient.
- * Post-submit evidence (navigation or document change) is required.
+ * For search tasks:
+ * - Action execution alone is NOT sufficient
+ * - Navigation/submission alone is NOT sufficient
+ * - goalSatisfied MUST be true (local goal verification passed)
  */
 function validateFinish(ctx: FinishGateContext): FinishGateResult {
   // Generic tasks: preserve existing finish behavior
@@ -166,16 +170,19 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
     return { allowed: true, reason: 'generic-task-finish-allowed' };
   }
 
-  // Search tasks: require confirmed post-submit evidence
+  // Search tasks: require goalSatisfied
   if (ctx.taskIntent === 'search') {
-    // If navigation/document change occurred, completion evidence exists
-    if (ctx.navigationOccurred || ctx.documentChanged) {
-      return { allowed: true, reason: 'navigation-observed' };
+    // Goal verification passed — allow finish
+    if (ctx.goalSatisfied) {
+      return { allowed: true, reason: 'goal-satisfied' };
     }
 
-    // If a submit action was attempted AND confirmed by post-submit evidence
-    if (ctx.submitActionConfirmed) {
-      return { allowed: true, reason: 'submit-action-confirmed' };
+    // Navigation occurred but goal not satisfied — premature
+    if (ctx.navigationOccurred || ctx.submitActionConfirmed) {
+      return {
+        allowed: false,
+        reason: 'goal-not-satisfied',
+      };
     }
 
     // Submit attempted but not confirmed — premature
@@ -206,6 +213,90 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
 /** Submit-like action kinds: click, select */
 const SUBMIT_ACTION_KINDS = new Set(['click', 'select']);
 
+// ── Search Goal Verification ─────────────────────────────────
+
+/**
+ * Extract the intended search query from a local user task.
+ * Conservative extraction: case/whitespace normalization only.
+ * Returns null if no search query can be identified.
+ */
+function extractSearchQuery(sanitizedTask: string): string | null {
+  // Match patterns like "Search for X", "search X", "find X", "look for X"
+  const patterns = [
+    /\bsearch\s+for\s+(.+)/i,
+    /\bsearch\s+(.+)/i,
+    /\bfind\s+(.+)/i,
+    /\blook\s+for\s+(.+)/i,
+    /\blook\s+up\s+(.+)/i,
+    /\bbrowse\s+for\s+(.+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = sanitizedTask.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Normalize a search query for comparison.
+ * Conservative: lowercase, collapse whitespace, trim.
+ */
+function normalizeQuery(query: string): string {
+  return query.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+interface SearchGoalResult {
+  goalSatisfied: boolean;
+  reason: string;
+  evidenceSource: string;
+}
+
+/**
+ * Verify whether the requested search goal was actually achieved.
+ * Runs LOCALLY — does not send raw values to remote planner.
+ * Uses multiple generic signals (URL, document title).
+ */
+function verifySearchGoal(
+  requestedQuery: string | null,
+  currentUrl: string | undefined,
+  documentTitle: string | undefined,
+): SearchGoalResult {
+  if (!requestedQuery) {
+    // Cannot extract query — fail open (allow finish)
+    return { goalSatisfied: true, reason: 'no-query-extracted', evidenceSource: 'none' };
+  }
+
+  const normalizedRequested = normalizeQuery(requestedQuery);
+
+  // Evidence 1: URL contains the normalized requested query
+  if (currentUrl) {
+    try {
+      const urlObj = new URL(currentUrl);
+      const urlText = decodeURIComponent(
+        (urlObj.search + urlObj.pathname).replace(/\+/g, ' ')
+      ).toLowerCase();
+      if (urlText.includes(normalizedRequested)) {
+        return { goalSatisfied: true, reason: 'query-found-in-url', evidenceSource: 'url' };
+      }
+    } catch {
+      // URL parse failure — skip URL evidence
+    }
+  }
+
+  // Evidence 2: Document title contains the query
+  if (documentTitle) {
+    const normalizedTitle = normalizeQuery(documentTitle);
+    if (normalizedTitle.includes(normalizedRequested)) {
+      return { goalSatisfied: true, reason: 'query-found-in-title', evidenceSource: 'title' };
+    }
+  }
+
+  // No evidence found — goal not satisfied
+  return { goalSatisfied: false, reason: 'query-not-found', evidenceSource: 'url+title' };
+}
+
 // ── State ────────────────────────────────────────────────────
 
 /** Safe action history entry — NEVER contains raw values, tokens, or page content */
@@ -230,6 +321,8 @@ interface TaskProgressContext {
     submitActionAttempted: boolean;
     /** Post-submit evidence confirms task progression */
     submitActionConfirmed: boolean;
+    /** Local goal verification confirms task objective was met */
+    goalSatisfied: boolean;
   };
 }
 
@@ -245,6 +338,7 @@ const EMPTY_PROGRESS: TaskProgressContext = {
     documentChanged: false,
     submitActionAttempted: false,
     submitActionConfirmed: false,
+    goalSatisfied: false,
   },
 };
 
@@ -1195,6 +1289,29 @@ export class Coordinator {
             progressStep: this.state.taskProgress.step,
             submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
           });
+
+          // Search goal verification: check if requested query was actually submitted
+          const navIntent = classifyTaskIntent(this.state.activeTaskRaw || '');
+          if (navIntent === 'search' && this.state.activeTaskRaw) {
+            try {
+              const tab = await chrome.tabs.get(sessionTabId);
+              const requestedQuery = extractSearchQuery(this.state.activeTaskRaw);
+              const goalResult = verifySearchGoal(
+                requestedQuery,
+                tab.url,
+                tab.title,
+              );
+              this.state.taskProgress.stateChanges.goalSatisfied = goalResult.goalSatisfied;
+              console.log('[Coordinator] Search goal verification:', {
+                goalSatisfied: goalResult.goalSatisfied,
+                reason: goalResult.reason,
+                evidenceSource: goalResult.evidenceSource,
+              });
+            } catch (e) {
+              // Tab query failed — leave goalSatisfied as false (fail closed)
+              console.warn('[Coordinator] Goal verification tab query failed:', e);
+            }
+          }
         }
       }
       this.state.lastDocumentGeneration = authoritativeDocGen;
@@ -2099,6 +2216,7 @@ export class Coordinator {
             documentChanged: this.state.taskProgress.stateChanges.documentChanged,
             submitActionAttempted: this.state.taskProgress.stateChanges.submitActionAttempted,
             submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
+            goalSatisfied: this.state.taskProgress.stateChanges.goalSatisfied,
           };
           const finishResult = validateFinish(finishCtx);
 
@@ -2111,6 +2229,7 @@ export class Coordinator {
               navigationOccurred: finishCtx.navigationOccurred,
               submitActionAttempted: finishCtx.submitActionAttempted,
               submitActionConfirmed: finishCtx.submitActionConfirmed,
+              goalSatisfied: finishCtx.goalSatisfied,
             });
             // Do NOT execute finish — break the action loop.
             // The continuation mechanism will re-observe and re-plan.

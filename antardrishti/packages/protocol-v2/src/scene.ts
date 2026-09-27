@@ -34,6 +34,18 @@ export interface PlannerSceneNode {
    *  The planner MUST only propose actions listed here for this node.
    *  e.g. ['type_text','type_token','click','focus'] for a searchbox */
   supportedActions?: string[];
+  /** Semantic interaction role derived from DOM/a11y context.
+   *  Helps the planner distinguish search inputs, submit controls,
+   *  autocomplete suggestions, and generic elements. */
+  interactionRole?:
+    | 'search_input'
+    | 'search_submit'
+    | 'autocomplete_option'
+    | 'form_input'
+    | 'form_submit'
+    | 'navigation_link'
+    | 'button'
+    | 'generic';
   state?: Record<string, boolean | number | string>;
 }
 

@@ -83,6 +83,7 @@ function makeValidProgress(): any {
       documentChanged: false,
       submitActionAttempted: false,
       submitActionConfirmed: false,
+      goalSatisfied: false,
     },
   };
 }
@@ -200,6 +201,7 @@ test('WS-13: multi-step progress with 5 history entries → accepted', () => {
     documentChanged: true,
     submitActionAttempted: true,
     submitActionConfirmed: true,
+    goalSatisfied: true,
   };
   const result = PlannerRequestSchema.safeParse(makeValidRequest(progress));
   assert.equal(result.success, true, `Expected success, got: ${JSON.stringify(result.error?.issues)}`);
@@ -211,7 +213,7 @@ test('WS-14: step=0 with empty history → accepted', () => {
     step: 0,
     actionHistory: [],
     taskStatus: 'in_progress' as const,
-    stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false, submitActionAttempted: false, submitActionConfirmed: false },
+    stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false, submitActionAttempted: false, submitActionConfirmed: false, goalSatisfied: false },
   };
   const result = PlannerRequestSchema.safeParse(makeValidRequest(progress));
   assert.equal(result.success, true, `Expected success, got: ${JSON.stringify(result.error?.issues)}`);
@@ -224,7 +226,7 @@ test('WS-15: TaskProgressSchema rejects targetNodeId in history', () => {
     lastAction: { kind: 'click', outcome: 'success' },
     actionHistory: [{ kind: 'click', outcome: 'success', targetNodeId: 'n-1' }],
     taskStatus: 'in_progress',
-    stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false, submitActionAttempted: false, submitActionConfirmed: false },
+    stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false, submitActionAttempted: false, submitActionConfirmed: false, goalSatisfied: false },
   });
   assert.equal(result.success, false);
 });

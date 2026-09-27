@@ -71,6 +71,7 @@ class SceneNode(BaseModel):
     bbox: Optional[dict] = None
     actionability: Optional[str] = None
     supportedActions: Optional[list[str]] = None
+    interactionRole: Optional[str] = None
 
 class SceneCoverage(BaseModel):
     visualGrounding: str = "none"
@@ -107,6 +108,7 @@ class StateChanges(BaseModel):
     documentChanged: bool = False
     submitActionAttempted: bool = False
     submitActionConfirmed: bool = False
+    goalSatisfied: bool = False
 
 class TaskProgressContext(BaseModel):
     step: int = 0
@@ -661,6 +663,8 @@ class LLMPlanner(PlannerAdapter):
                 parts.append(f"action={n.actionability}")
             if n.supportedActions:
                 parts.append(f"supportedActions=[{','.join(n.supportedActions)}]")
+            if n.interactionRole and n.interactionRole != 'generic':
+                parts.append(f"interactionRole={n.interactionRole}")
             if n.value:
                 parts.append(f"value={n.value[:30]}")
             nodes_desc.append(" ".join(parts))
@@ -704,18 +708,25 @@ RULES:
 - Actions targeting a DOM element MUST include "targetNodeId" matching a scene node id.
 - NEVER fabricate a targetNodeId. Use ONLY exact node IDs from the SCENE NODES list above.
 - CRITICAL: Each scene node has a "supportedActions" list. You MUST only propose an action whose kind appears in the target node's supportedActions. If a node does not list the action you want, find a different node that does.
+- Scene nodes may have an "interactionRole" indicating their semantic purpose: search_input, search_submit, autocomplete_option, form_input, form_submit, navigation_link, button, or generic.
 - For "type_text" and "type_token":
   - targetNodeId MUST refer to a node whose supportedActions includes "type_text" or "type_token".
-  - Prefer nodes with role "textbox", "searchbox", or "combobox".
+  - Prefer nodes with role "textbox", "searchbox", or interactionRole=search_input.
   - The target must be an input field, textarea, or contenteditable element.
   - Do NOT target a button, link, heading, label, image, container, or generic text node.
-  - For search tasks, identify the actual search input field (role=searchbox or textbox) before emitting type_text.
+  - For search tasks, identify the actual search input field (interactionRole=search_input or role=searchbox) before emitting type_text.
   - NEVER target a generic wrapper or container div for type_text — find the actual input element.
 - For "click":
   - target a node whose supportedActions includes "click".
   - Prefer semantic controls (button, link, submit) over generic containers.
   - When a submit button exists alongside a search input, use the submit button for search submission.
 - For "select": target a select/dropdown element whose supportedActions includes "select".
+- SEARCH TASK RULES:
+  1. Enter the exact requested search query into the search input (interactionRole=search_input).
+  2. After typing, prefer clicking the search submission control (interactionRole=search_submit or form_submit).
+  3. Do NOT click an autocomplete suggestion (interactionRole=autocomplete_option) merely because it is clickable. Use autocomplete only when the user task specifically asks for a suggestion.
+  4. After submission, inspect the fresh observation to verify the search results appeared.
+  5. Never declare search completion solely from a navigation event.
 - Do NOT repeat an action that already succeeded unless the fresh observation shows it needs to be done again.
 - If text was already entered successfully (TASK PROGRESS shows textEntered=true), prefer submitting/clicking instead of typing again.
 - Progress toward task completion — do not restart earlier steps that are already done.
@@ -761,6 +772,8 @@ Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
             changes.append("submitActionAttempted=true")
         if sc.submitActionConfirmed:
             changes.append("submitActionConfirmed=true")
+        if sc.goalSatisfied:
+            changes.append("goalSatisfied=true")
         if changes:
             lines.append(f"  stateChanges: {', '.join(changes)}")
         else:
