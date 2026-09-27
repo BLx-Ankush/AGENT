@@ -115,6 +115,40 @@ const DEFAULT_PLANNER_URL = 'http://localhost:8000/v1/plan';
 
 // ── State ────────────────────────────────────────────────────
 
+/** Safe action history entry — NEVER contains raw values, tokens, or page content */
+interface ActionHistoryEntry {
+  kind: string;
+  outcome: 'success' | 'failure' | 'rejected';
+}
+
+/** Task progress context — derived locally, never from planner output */
+interface TaskProgressContext {
+  step: number;
+  lastAction?: ActionHistoryEntry;
+  /** Bounded history of recent actions (max 5) */
+  actionHistory: ActionHistoryEntry[];
+  taskStatus: 'in_progress' | 'completed' | 'blocked';
+  /** Safe local signals — never expose raw values */
+  stateChanges: {
+    textEntered: boolean;
+    navigationOccurred: boolean;
+    documentChanged: boolean;
+  };
+}
+
+const MAX_ACTION_HISTORY = 5;
+
+const EMPTY_PROGRESS: TaskProgressContext = {
+  step: 0,
+  actionHistory: [],
+  taskStatus: 'in_progress',
+  stateChanges: {
+    textEntered: false,
+    navigationOccurred: false,
+    documentChanged: false,
+  },
+};
+
 interface CoordinatorState {
   sessionId: string | null;
   isActive: boolean;
@@ -128,6 +162,10 @@ interface CoordinatorState {
   activeTaskRaw: string | null;
   /** Number of continuation cycles completed for the current task */
   continuationCount: number;
+  /** Local task progress state — drives planner context, NOT execution authority */
+  taskProgress: TaskProgressContext;
+  /** Document generation from previous observation — for detecting navigation */
+  lastDocumentGeneration: string | null;
 }
 
 const INITIAL_STATE: CoordinatorState = {
@@ -141,6 +179,8 @@ const INITIAL_STATE: CoordinatorState = {
   plannerUrl: null,
   activeTaskRaw: null,
   continuationCount: 0,
+  taskProgress: { ...EMPTY_PROGRESS, actionHistory: [] },
+  lastDocumentGeneration: null,
 };
 
 /**
@@ -936,6 +976,12 @@ export class Coordinator {
       this.state.activeTaskRaw = payload.rawTask;
       this.state.continuationCount = 0;
       this._continuationScheduled = false;
+      // Reset progress for new user task
+      this.state.taskProgress = {
+        ...EMPTY_PROGRESS,
+        actionHistory: [],
+        stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false },
+      };
     }
     console.log('[Coordinator] Task continuation state:', {
       isContinuation,
@@ -943,6 +989,9 @@ export class Coordinator {
       continuationCount: this.state.continuationCount,
       isActive: this.state.isActive,
       activeTabId: this.state.activeTabId,
+      progressStep: this.state.taskProgress.step,
+      taskStatus: this.state.taskProgress.taskStatus,
+      historyLength: this.state.taskProgress.actionHistory.length,
     });
 
     // P1-F: All downstream operations MUST use the session-bound tab ID,
@@ -989,6 +1038,20 @@ export class Coordinator {
         this.setPhase('idle');
         return;
       }
+
+      // ── Detect navigation between observations ──
+      if (isContinuation && this.state.lastDocumentGeneration !== null) {
+        const currentDocGen = captureResult.stamp.documentGeneration;
+        if (currentDocGen !== this.state.lastDocumentGeneration) {
+          this.state.taskProgress.stateChanges.documentChanged = true;
+          this.state.taskProgress.stateChanges.navigationOccurred = true;
+          console.log('[Coordinator] Navigation detected:', {
+            documentChanged: true,
+            progressStep: this.state.taskProgress.step,
+          });
+        }
+      }
+      this.state.lastDocumentGeneration = captureResult.stamp.documentGeneration;
 
       // ── Step 2: Request DOM harvest + canvas context ─────
       const harvestResult = await this.requestHarvest(
@@ -1399,7 +1462,29 @@ export class Coordinator {
             ? sanitized.protectedVisualRegions
             : undefined,
         allowedActions: [...ALLOWED_ACTION_KINDS],
+        // Include task progress when there is actual progress to report
+        ...(this.state.taskProgress.step > 0 ? {
+          taskProgress: {
+            step: this.state.taskProgress.step,
+            lastAction: this.state.taskProgress.lastAction,
+            actionHistory: this.state.taskProgress.actionHistory,
+            taskStatus: this.state.taskProgress.taskStatus,
+            stateChanges: { ...this.state.taskProgress.stateChanges },
+          },
+        } : {}),
       };
+
+      if (plannerRequest.taskProgress) {
+        console.log('[Coordinator] Planner task-progress context:', {
+          step: plannerRequest.taskProgress.step,
+          taskStatus: plannerRequest.taskProgress.taskStatus,
+          lastActionKind: plannerRequest.taskProgress.lastAction?.kind,
+          lastActionOutcome: plannerRequest.taskProgress.lastAction?.outcome,
+          historyLength: plannerRequest.taskProgress.actionHistory.length,
+          textEntered: plannerRequest.taskProgress.stateChanges.textEntered,
+          navigationOccurred: plannerRequest.taskProgress.stateChanges.navigationOccurred,
+        });
+      }
 
       // INVARIANT: raw visual observations MUST NOT be in plannerRequest
       // Raw imageData, ocrResults, faceDetections are local-only
@@ -1452,6 +1537,7 @@ export class Coordinator {
             redactions: remediatedRedactions,
             protectedVisualRegions: plannerRequest.protectedVisualRegions,
             allowedActions: plannerRequest.allowedActions,
+            taskProgress: plannerRequest.taskProgress,
           };
 
           console.log('[Coordinator] P0.9: Re-verifying remediated payload');
@@ -1829,12 +1915,39 @@ export class Coordinator {
         // the observation, or allow subsequent actions to run.
         if (!execResult.executed) {
           console.error('[Coordinator] Execution FAILED for', action.kind, action.id, ':', execResult.reason);
+          // Record failure in progress (bounded history)
+          const failEntry: ActionHistoryEntry = { kind: action.kind, outcome: 'failure' };
+          this.state.taskProgress.lastAction = failEntry;
+          this.state.taskProgress.actionHistory.push(failEntry);
+          if (this.state.taskProgress.actionHistory.length > MAX_ACTION_HISTORY) {
+            this.state.taskProgress.actionHistory.shift();
+          }
           sendResponse({ ack: false, error: `Execution failed: ${execResult.reason}` });
           this.setPhase('idle');
           return;
         }
 
         executedActionCount++;
+
+        // ── Record task progress ──────────────────────────────
+        const successEntry: ActionHistoryEntry = { kind: action.kind, outcome: 'success' };
+        this.state.taskProgress.step++;
+        this.state.taskProgress.lastAction = successEntry;
+        this.state.taskProgress.actionHistory.push(successEntry);
+        if (this.state.taskProgress.actionHistory.length > MAX_ACTION_HISTORY) {
+          this.state.taskProgress.actionHistory.shift();
+        }
+        // Safe state-change signals from action kind only
+        if (action.kind === 'type_text' || action.kind === 'type_token') {
+          this.state.taskProgress.stateChanges.textEntered = true;
+        }
+        console.log('[Coordinator] Task progress updated:', {
+          step: this.state.taskProgress.step,
+          lastActionKind: successEntry.kind,
+          lastActionOutcome: successEntry.outcome,
+          taskStatus: this.state.taskProgress.taskStatus,
+          historyLength: this.state.taskProgress.actionHistory.length,
+        });
 
         if (isStateChanging) {
           executedStateChangingAction = true;

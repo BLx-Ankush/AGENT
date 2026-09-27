@@ -164,6 +164,61 @@ def test_prefer_textbox():
 run_test("PC-14 -- prefer textbox/searchbox for type_text", test_prefer_textbox)
 
 
+# Test 15: No-repeat action rule
+def test_no_repeat_action():
+    assert "Do NOT repeat" in prompt or "do not repeat" in prompt.lower()
+
+run_test("PC-15 -- no-repeat-action rule", test_no_repeat_action)
+
+
+# Test 16: textEntered preference rule
+def test_text_entered_prefer_click():
+    assert "textEntered" in prompt or "text was already entered" in prompt.lower()
+
+run_test("PC-16 -- textEntered prefer click rule", test_text_entered_prefer_click)
+
+
+# Test 17: Progress section appears with progress
+from server import TaskProgressContext, ActionHistoryEntry, StateChanges
+def test_progress_section_present():
+    req_with_progress = PlannerRequest(
+        protocolVersion="2.0",
+        session=SessionInfo(
+            id="test-session", step=2, observationId="obs-2",
+            origin="https://example.com", documentGeneration="doc-2",
+            viewport=Viewport(width=1920, height=1080, devicePixelRatio=1),
+        ),
+        task=TaskInfo(sanitized="Search for OnePlus 12R", risk="low"),
+        scene=Scene(nodes=[
+            SceneNode(id="n-1", role="searchbox", name="Search"),
+        ]),
+        redactions=[],
+        allowedActions=["click", "type_text", "finish"],
+        taskProgress=TaskProgressContext(
+            step=1,
+            lastAction=ActionHistoryEntry(kind="type_text", outcome="success"),
+            actionHistory=[ActionHistoryEntry(kind="type_text", outcome="success")],
+            taskStatus="in_progress",
+            stateChanges=StateChanges(textEntered=True),
+        ),
+    )
+    p = planner._build_prompt(req_with_progress)
+    assert "TASK PROGRESS:" in p
+    assert "textEntered=true" in p
+    assert "type_text" in p
+
+run_test("PC-17 -- progress section present with progress", test_progress_section_present)
+
+
+# Test 18: Progress section absent without progress
+def test_progress_section_absent():
+    req_no_progress = make_request()  # No taskProgress
+    p = planner._build_prompt(req_no_progress)
+    assert "TASK PROGRESS:" not in p
+
+run_test("PC-18 -- progress section absent without progress", test_progress_section_absent)
+
+
 # Summary
 print(f"\n--- Planner Prompt Constraints: {passed} passed, {failed} failed ---")
 if failures:

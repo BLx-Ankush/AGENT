@@ -44,6 +44,18 @@ export interface PlannerRequestInput {
   redactions: unknown[];
   protectedVisualRegions?: unknown[];
   allowedActions: string[];
+  /** Safe local task progress — NEVER contains raw values, tokens, or page content */
+  taskProgress?: {
+    step: number;
+    lastAction?: { kind: string; outcome: string };
+    actionHistory: Array<{ kind: string; outcome: string }>;
+    taskStatus: string;
+    stateChanges: {
+      textEntered: boolean;
+      navigationOccurred: boolean;
+      documentChanged: boolean;
+    };
+  };
 }
 
 // ── Planner response (output) ────────────────────────────────

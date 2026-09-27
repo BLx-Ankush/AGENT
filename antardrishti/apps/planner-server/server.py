@@ -96,6 +96,22 @@ class ProtectedVisualRegion(BaseModel):
     representation: str
     bbox: Optional[dict] = None
 
+class ActionHistoryEntry(BaseModel):
+    kind: str
+    outcome: str
+
+class StateChanges(BaseModel):
+    textEntered: bool = False
+    navigationOccurred: bool = False
+    documentChanged: bool = False
+
+class TaskProgressContext(BaseModel):
+    step: int = 0
+    lastAction: Optional[ActionHistoryEntry] = None
+    actionHistory: list[ActionHistoryEntry] = []
+    taskStatus: str = "in_progress"
+    stateChanges: StateChanges = StateChanges()
+
 class PlannerRequest(BaseModel):
     protocolVersion: str = "2.0"
     session: SessionInfo
@@ -104,6 +120,7 @@ class PlannerRequest(BaseModel):
     redactions: list[RedactionDecl] = []
     protectedVisualRegions: list[ProtectedVisualRegion] = []
     allowedActions: list[str] = []
+    taskProgress: Optional[TaskProgressContext] = None
 
 class AgentAction(BaseModel):
     kind: str
@@ -668,7 +685,7 @@ SCENE NODES:
 
 REDACTED VALUES:
 {chr(10).join(redactions_desc) if redactions_desc else "  (none)"}
-
+{self._build_progress_section(request)}
 ALLOWED ACTIONS: {allowed}
 
 RULES:
@@ -689,6 +706,10 @@ RULES:
   - For search tasks, identify the actual search input field before emitting type_text.
 - For "click": target the element you want to activate (button, link, checkbox, etc.).
 - For "select": target a select/dropdown element only.
+- Do NOT repeat an action that already succeeded unless the fresh observation shows it needs to be done again.
+- If text was already entered successfully (TASK PROGRESS shows textEntered=true), prefer submitting/clicking instead of typing again.
+- Progress toward task completion — do not restart earlier steps that are already done.
+- If the task appears complete based on the current observation, use "finish".
 
 Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
 {{"actions": [
@@ -698,6 +719,41 @@ Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
   {{"kind": "wait", "id": "action-4", "milliseconds": 1000, "reason": "<only if genuinely needed>"}}
 ]}}
 """
+
+    def _build_progress_section(self, request: PlannerRequest) -> str:
+        """Build safe task progress section for the prompt."""
+        if not request.taskProgress or request.taskProgress.step == 0:
+            return ""
+
+        tp = request.taskProgress
+        lines = ["\nTASK PROGRESS:"]
+        lines.append(f"  step: {tp.step}")
+        lines.append(f"  taskStatus: {tp.taskStatus}")
+
+        if tp.lastAction:
+            lines.append(f"  lastAction: {tp.lastAction.kind} → {tp.lastAction.outcome}")
+
+        if tp.actionHistory:
+            history_str = ", ".join(
+                f"{a.kind}→{a.outcome}" for a in tp.actionHistory[-5:]
+            )
+            lines.append(f"  recentActions: [{history_str}]")
+
+        sc = tp.stateChanges
+        changes = []
+        if sc.textEntered:
+            changes.append("textEntered=true")
+        if sc.navigationOccurred:
+            changes.append("navigationOccurred=true")
+        if sc.documentChanged:
+            changes.append("documentChanged=true")
+        if changes:
+            lines.append(f"  stateChanges: {', '.join(changes)}")
+        else:
+            lines.append("  stateChanges: (none)")
+
+        lines.append("")
+        return chr(10).join(lines)
 
     def _parse_actions(
         self, plan_data: dict, request: PlannerRequest
