@@ -136,6 +136,34 @@ def test_task_present():
 run_test("PC-10 -- task included in prompt", test_task_present)
 
 
+# Test 11: type_text writable text control constraint
+def test_type_text_writable():
+    assert "writable text control" in prompt.lower()
+
+run_test("PC-11 -- type_text writable control constraint", test_type_text_writable)
+
+
+# Test 12: type_text must not target non-writable
+def test_type_text_no_button():
+    assert "button" in prompt.lower() and "Do NOT target" in prompt
+
+run_test("PC-12 -- type_text no-button constraint", test_type_text_no_button)
+
+
+# Test 13: No fabrication rule
+def test_no_fabricate():
+    assert "fabricate" in prompt.lower() or "NEVER fabricate" in prompt
+
+run_test("PC-13 -- no fabricate targetNodeId rule", test_no_fabricate)
+
+
+# Test 14: Prefer textbox/searchbox for type_text
+def test_prefer_textbox():
+    assert "textbox" in prompt and "searchbox" in prompt
+
+run_test("PC-14 -- prefer textbox/searchbox for type_text", test_prefer_textbox)
+
+
 # Summary
 print(f"\n--- Planner Prompt Constraints: {passed} passed, {failed} failed ---")
 if failures:

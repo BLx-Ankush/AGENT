@@ -1527,6 +1527,77 @@ export class Coordinator {
         sanitized.scene.nodes.map((n) => n.id),
       );
 
+      // ── Target diagnostic ──────────────────────────────────
+      // Log safe metadata for each target-bound action to diagnose
+      // planner target selection issues.
+      const harvestNodeMap = new Map<string, any>();
+      for (const n of (harvestResult?.nodes || [])) {
+        if (n && n.id) harvestNodeMap.set(n.id, n);
+      }
+      // Also build a lookup of compacted (planner-visible) node IDs
+      const plannerVisibleIds = new Set(sanitized.scene.nodes.map((n: any) => n.id));
+
+      for (const action of plannerResponse.actions) {
+        const targetNodeId = 'targetNodeId' in action ? (action as any).targetNodeId : undefined;
+        if (!targetNodeId) continue;
+
+        const harvestNode = harvestNodeMap.get(targetNodeId);
+        const tag = harvestNode?.tag || 'unknown';
+        const role = harvestNode?.role || 'unknown';
+        const inputType = harvestNode?.inputType || null;
+        const contentEditable = harvestNode?.contentEditable === true
+          || harvestNode?.contentEditable === 'true';
+        const actionability = harvestNode?.actionability || null;
+        const name = harvestNode?.name || '';
+
+        // Determine compatibility for this action+target
+        let executableCompatible = true;
+        if (action.kind === 'type_text' || action.kind === 'type_token') {
+          executableCompatible = (
+            tag === 'input'
+            || tag === 'textarea'
+            || contentEditable
+          );
+        } else if (action.kind === 'select') {
+          executableCompatible = tag === 'select';
+        }
+
+        console.log('[Coordinator] Planner target diagnostic:', {
+          actionId: action.id,
+          kind: action.kind,
+          targetNodeId,
+          nodeFound: !!harvestNode,
+          plannerVisible: plannerVisibleIds.has(targetNodeId),
+          role,
+          tag,
+          inputType,
+          name: name.substring(0, 40),
+          contentEditable,
+          actionability,
+          executableCompatible,
+        });
+      }
+
+      // Log search-relevant candidates from the scene
+      const searchCandidates = (harvestResult?.nodes || [])
+        .filter((n: any) => n && (
+          n.role === 'searchbox' || n.role === 'textbox'
+          || n.tag === 'input' || n.tag === 'textarea'
+          || (n.inputType && n.inputType === 'search')
+        ))
+        .slice(0, 5);
+      if (searchCandidates.length > 0) {
+        console.log('[Coordinator] Search-relevant harvest inputs:', searchCandidates.map((n: any) => ({
+          id: n.id,
+          role: n.role,
+          tag: n.tag,
+          inputType: n.inputType || null,
+          name: (n.name || '').substring(0, 40),
+          plannerVisible: plannerVisibleIds.has(n.id),
+          actionability: n.actionability || null,
+        })));
+      }
+
       // P1-C: Build target fingerprints from harvested scene nodes
       // Uses ancestryFingerprint which is the canonical ancestry string
       // produced by getAncestorTags().join('>') during harvesting.

@@ -680,6 +680,15 @@ RULES:
 - For normal search/form/click workflows, do NOT include a wait action.
 - Each action MUST have "kind", "id", and "reason".
 - Actions targeting a DOM element MUST include "targetNodeId" matching a scene node id.
+- NEVER fabricate a targetNodeId. Use ONLY exact node IDs from the SCENE NODES list above.
+- For "type_text" and "type_token":
+  - targetNodeId MUST refer to a writable text control.
+  - Prefer nodes with role "textbox", "searchbox", or "combobox".
+  - The target must be an input field, textarea, or contenteditable element.
+  - Do NOT target a button, link, heading, label, image, container, or generic text node.
+  - For search tasks, identify the actual search input field before emitting type_text.
+- For "click": target the element you want to activate (button, link, checkbox, etc.).
+- For "select": target a select/dropdown element only.
 
 Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
 {{"actions": [
