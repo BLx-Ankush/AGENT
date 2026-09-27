@@ -112,6 +112,8 @@ const StateChangesSchema = z.object({
   textEntered: z.boolean(),
   navigationOccurred: z.boolean(),
   documentChanged: z.boolean(),
+  submitActionAttempted: z.boolean(),
+  submitActionConfirmed: z.boolean(),
 }).strict();
 
 export const TaskProgressSchema = z.object({

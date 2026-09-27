@@ -141,8 +141,10 @@ interface FinishGateContext {
   textEntered: boolean;
   navigationOccurred: boolean;
   documentChanged: boolean;
-  /** Whether a submit-like action (click, select) has succeeded */
-  submitActionSucceeded: boolean;
+  /** Whether a submit-like action (click, select) has been attempted */
+  submitActionAttempted: boolean;
+  /** Whether post-submit evidence confirms task progression */
+  submitActionConfirmed: boolean;
 }
 
 interface FinishGateResult {
@@ -154,6 +156,9 @@ interface FinishGateResult {
  * Validate whether a planner-proposed `finish` should be accepted.
  * This is a LOCAL gate — it does not override P1-I, freshness, or execution authority.
  * It prevents premature task termination when local evidence does not support completion.
+ *
+ * For search tasks, click/select execution alone is NOT sufficient.
+ * Post-submit evidence (navigation or document change) is required.
  */
 function validateFinish(ctx: FinishGateContext): FinishGateResult {
   // Generic tasks: preserve existing finish behavior
@@ -161,19 +166,27 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
     return { allowed: true, reason: 'generic-task-finish-allowed' };
   }
 
-  // Search tasks: require submission evidence before finish
+  // Search tasks: require confirmed post-submit evidence
   if (ctx.taskIntent === 'search') {
     // If navigation/document change occurred, completion evidence exists
     if (ctx.navigationOccurred || ctx.documentChanged) {
       return { allowed: true, reason: 'navigation-observed' };
     }
 
-    // If a submit-like action (click) succeeded after text entry, allow
-    if (ctx.submitActionSucceeded) {
-      return { allowed: true, reason: 'submit-action-succeeded' };
+    // If a submit action was attempted AND confirmed by post-submit evidence
+    if (ctx.submitActionConfirmed) {
+      return { allowed: true, reason: 'submit-action-confirmed' };
     }
 
-    // Text was entered but no submission or navigation — premature
+    // Submit attempted but not confirmed — premature
+    if (ctx.submitActionAttempted) {
+      return {
+        allowed: false,
+        reason: 'completion-not-established',
+      };
+    }
+
+    // Text was entered but no submission — premature
     if (ctx.textEntered) {
       return {
         allowed: false,
@@ -190,18 +203,8 @@ function validateFinish(ctx: FinishGateContext): FinishGateResult {
   return { allowed: true, reason: 'fallback-allowed' };
 }
 
-/**
- * Determine whether a submit-like action has succeeded in the action history.
- * Submit-like = click, select (NOT type_text, type_token, focus, scroll, wait)
- */
-function hasSubmitActionSucceeded(
-  actionHistory: Array<{ kind: string; outcome: string }>,
-): boolean {
-  const SUBMIT_KINDS = new Set(['click', 'select']);
-  return actionHistory.some(
-    a => SUBMIT_KINDS.has(a.kind) && a.outcome === 'success',
-  );
-}
+/** Submit-like action kinds: click, select */
+const SUBMIT_ACTION_KINDS = new Set(['click', 'select']);
 
 // ── State ────────────────────────────────────────────────────
 
@@ -223,6 +226,10 @@ interface TaskProgressContext {
     textEntered: boolean;
     navigationOccurred: boolean;
     documentChanged: boolean;
+    /** A submit-like action (click, select) has executed successfully */
+    submitActionAttempted: boolean;
+    /** Post-submit evidence confirms task progression */
+    submitActionConfirmed: boolean;
   };
 }
 
@@ -236,6 +243,8 @@ const EMPTY_PROGRESS: TaskProgressContext = {
     textEntered: false,
     navigationOccurred: false,
     documentChanged: false,
+    submitActionAttempted: false,
+    submitActionConfirmed: false,
   },
 };
 
@@ -1177,9 +1186,14 @@ export class Coordinator {
         if (changed) {
           this.state.taskProgress.stateChanges.documentChanged = true;
           this.state.taskProgress.stateChanges.navigationOccurred = true;
+          // If a submit action was attempted, navigation confirms it
+          if (this.state.taskProgress.stateChanges.submitActionAttempted) {
+            this.state.taskProgress.stateChanges.submitActionConfirmed = true;
+          }
           console.log('[Coordinator] Navigation detected (authoritative):', {
             documentChanged: true,
             progressStep: this.state.taskProgress.step,
+            submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
           });
         }
       }
@@ -2040,6 +2054,9 @@ export class Coordinator {
         if (action.kind === 'type_text' || action.kind === 'type_token') {
           this.state.taskProgress.stateChanges.textEntered = true;
         }
+        if (SUBMIT_ACTION_KINDS.has(action.kind)) {
+          this.state.taskProgress.stateChanges.submitActionAttempted = true;
+        }
         console.log('[Coordinator] Task progress updated:', {
           step: this.state.taskProgress.step,
           lastActionKind: successEntry.kind,
@@ -2080,7 +2097,8 @@ export class Coordinator {
             textEntered: this.state.taskProgress.stateChanges.textEntered,
             navigationOccurred: this.state.taskProgress.stateChanges.navigationOccurred,
             documentChanged: this.state.taskProgress.stateChanges.documentChanged,
-            submitActionSucceeded: hasSubmitActionSucceeded(this.state.taskProgress.actionHistory),
+            submitActionAttempted: this.state.taskProgress.stateChanges.submitActionAttempted,
+            submitActionConfirmed: this.state.taskProgress.stateChanges.submitActionConfirmed,
           };
           const finishResult = validateFinish(finishCtx);
 
@@ -2091,7 +2109,8 @@ export class Coordinator {
               lastActionKind: this.state.taskProgress.lastAction?.kind,
               textEntered: finishCtx.textEntered,
               navigationOccurred: finishCtx.navigationOccurred,
-              submitActionSucceeded: finishCtx.submitActionSucceeded,
+              submitActionAttempted: finishCtx.submitActionAttempted,
+              submitActionConfirmed: finishCtx.submitActionConfirmed,
             });
             // Do NOT execute finish — break the action loop.
             // The continuation mechanism will re-observe and re-plan.

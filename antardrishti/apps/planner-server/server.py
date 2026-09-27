@@ -104,6 +104,8 @@ class StateChanges(BaseModel):
     textEntered: bool = False
     navigationOccurred: bool = False
     documentChanged: bool = False
+    submitActionAttempted: bool = False
+    submitActionConfirmed: bool = False
 
 class TaskProgressContext(BaseModel):
     step: int = 0
@@ -747,6 +749,10 @@ Return ONLY valid JSON (no markdown, no explanation, no fenced code blocks):
             changes.append("navigationOccurred=true")
         if sc.documentChanged:
             changes.append("documentChanged=true")
+        if sc.submitActionAttempted:
+            changes.append("submitActionAttempted=true")
+        if sc.submitActionConfirmed:
+            changes.append("submitActionConfirmed=true")
         if changes:
             lines.append(f"  stateChanges: {', '.join(changes)}")
         else:
