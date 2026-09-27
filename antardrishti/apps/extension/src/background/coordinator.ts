@@ -1079,7 +1079,7 @@ export class Coordinator {
       this.state.taskProgress = {
         ...EMPTY_PROGRESS,
         actionHistory: [],
-        stateChanges: { textEntered: false, navigationOccurred: false, documentChanged: false },
+        stateChanges: { ...EMPTY_PROGRESS.stateChanges },
       };
     }
     console.log('[Coordinator] Task continuation state:', {
