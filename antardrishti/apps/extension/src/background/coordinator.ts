@@ -113,6 +113,96 @@ const TRUSTED_OFFSCREEN_PATH = '/offscreen.html';
  */
 const DEFAULT_PLANNER_URL = 'http://localhost:8000/v1/plan';
 
+// ── Task-intent classifier (local control, NOT planner authority) ─────
+
+/** Minimal deterministic task-intent detection from sanitized task text */
+type TaskIntent = 'search' | 'generic';
+
+const SEARCH_PATTERNS = [
+  /\bsearch\s+for\b/i,
+  /\bsearch\b/i,
+  /\bfind\b/i,
+  /\blook\s+for\b/i,
+  /\blook\s+up\b/i,
+  /\bbrowse\s+for\b/i,
+];
+
+function classifyTaskIntent(sanitizedTask: string): TaskIntent {
+  for (const pattern of SEARCH_PATTERNS) {
+    if (pattern.test(sanitizedTask)) return 'search';
+  }
+  return 'generic';
+}
+
+// ── Local finish completion gate ──────────────────────────────
+
+interface FinishGateContext {
+  taskIntent: TaskIntent;
+  textEntered: boolean;
+  navigationOccurred: boolean;
+  documentChanged: boolean;
+  /** Whether a submit-like action (click, select) has succeeded */
+  submitActionSucceeded: boolean;
+}
+
+interface FinishGateResult {
+  allowed: boolean;
+  reason: string;
+}
+
+/**
+ * Validate whether a planner-proposed `finish` should be accepted.
+ * This is a LOCAL gate — it does not override P1-I, freshness, or execution authority.
+ * It prevents premature task termination when local evidence does not support completion.
+ */
+function validateFinish(ctx: FinishGateContext): FinishGateResult {
+  // Generic tasks: preserve existing finish behavior
+  if (ctx.taskIntent === 'generic') {
+    return { allowed: true, reason: 'generic-task-finish-allowed' };
+  }
+
+  // Search tasks: require submission evidence before finish
+  if (ctx.taskIntent === 'search') {
+    // If navigation/document change occurred, completion evidence exists
+    if (ctx.navigationOccurred || ctx.documentChanged) {
+      return { allowed: true, reason: 'navigation-observed' };
+    }
+
+    // If a submit-like action (click) succeeded after text entry, allow
+    if (ctx.submitActionSucceeded) {
+      return { allowed: true, reason: 'submit-action-succeeded' };
+    }
+
+    // Text was entered but no submission or navigation — premature
+    if (ctx.textEntered) {
+      return {
+        allowed: false,
+        reason: 'completion-not-established',
+      };
+    }
+
+    // No text entered and no navigation — could be valid early finish
+    return { allowed: true, reason: 'no-text-entered-finish-allowed' };
+  }
+
+  // Fallback: allow (fail-open for unknown intents is acceptable since
+  // the planner proposed finish explicitly)
+  return { allowed: true, reason: 'fallback-allowed' };
+}
+
+/**
+ * Determine whether a submit-like action has succeeded in the action history.
+ * Submit-like = click, select (NOT type_text, type_token, focus, scroll, wait)
+ */
+function hasSubmitActionSucceeded(
+  actionHistory: Array<{ kind: string; outcome: string }>,
+): boolean {
+  const SUBMIT_KINDS = new Set(['click', 'select']);
+  return actionHistory.some(
+    a => SUBMIT_KINDS.has(a.kind) && a.outcome === 'success',
+  );
+}
+
 // ── State ────────────────────────────────────────────────────
 
 /** Safe action history entry — NEVER contains raw values, tokens, or page content */
@@ -1981,9 +2071,37 @@ export class Coordinator {
             'invalidated after state-changing action — re-observation required');
         }
 
-        // finish terminates the task entirely
+        // finish terminates the task entirely — but validate locally first
         if (action.kind === 'finish') {
-          console.log('[Coordinator] Task finished by planner');
+          const taskRaw = this.state.activeTaskRaw || '';
+          const intent = classifyTaskIntent(taskRaw);
+          const finishCtx: FinishGateContext = {
+            taskIntent: intent,
+            textEntered: this.state.taskProgress.stateChanges.textEntered,
+            navigationOccurred: this.state.taskProgress.stateChanges.navigationOccurred,
+            documentChanged: this.state.taskProgress.stateChanges.documentChanged,
+            submitActionSucceeded: hasSubmitActionSucceeded(this.state.taskProgress.actionHistory),
+          };
+          const finishResult = validateFinish(finishCtx);
+
+          if (!finishResult.allowed) {
+            console.log('[Coordinator] Finish rejected:', {
+              reason: finishResult.reason,
+              taskIntent: intent,
+              lastActionKind: this.state.taskProgress.lastAction?.kind,
+              textEntered: finishCtx.textEntered,
+              navigationOccurred: finishCtx.navigationOccurred,
+              submitActionSucceeded: finishCtx.submitActionSucceeded,
+            });
+            // Do NOT execute finish — break the action loop.
+            // The continuation mechanism will re-observe and re-plan.
+            break;
+          }
+
+          console.log('[Coordinator] Task finished by planner:', {
+            reason: finishResult.reason,
+            taskIntent: intent,
+          });
           this.state.activeTaskRaw = null;
           break;
         }
