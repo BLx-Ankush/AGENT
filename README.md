@@ -544,7 +544,7 @@ This project is developed as part of the **Smart India Hackathon 2026** initiati
 ---
 
 <p align="center">
-  <strong>Built with 🔒 for the Smart India Hackathon 2026 Finals</strong>
+  <strong>Built by The Honoured Ones</strong>
   <br/>
   <em>Problem Statement: SIH26171 — Privacy Control Plane for Hybrid Browser Agents</em>
 </p>
